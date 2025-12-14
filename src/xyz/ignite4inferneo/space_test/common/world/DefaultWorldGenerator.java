@@ -3,16 +3,14 @@ package xyz.ignite4inferneo.space_test.common.world;
 import java.util.Random;
 
 /**
- * Default world generator with simple terrain
+ * Fixed world generator - proper terrain layers
  */
 public class DefaultWorldGenerator implements IWorldGenerator {
 
     private final long seed;
-    private final Random random;
 
     public DefaultWorldGenerator(long seed) {
         this.seed = seed;
-        this.random = new Random(seed);
     }
 
     @Override
@@ -28,49 +26,67 @@ public class DefaultWorldGenerator implements IWorldGenerator {
 
                 // Simple terrain height using sine waves
                 double noise = Math.sin(worldX * 0.1) * Math.cos(worldZ * 0.1);
-                int groundHeight = 5 + (int)(noise * 3)+50;
+                int groundHeight = 58 + (int)(noise * 4); // Height 54-62
 
-                // Generate terrain layers
-                for (int y = 0; y < groundHeight; y++) {
-                    if (y < groundHeight - 3) {
+                // Generate terrain layers FROM BOTTOM UP
+                for (int y = 0; y <= groundHeight; y++) {
+                    if (y == 0) {
+                        // Bedrock at bottom
                         chunk.setBlock(x, y, z, "space_test:stone");
-                    } else if (y < groundHeight - 1) {
+                    } else if (y < groundHeight - 3) {
+                        // Deep stone
+                        chunk.setBlock(x, y, z, "space_test:stone");
+                    } else if (y < groundHeight) {
+                        // Dirt layer (2-3 blocks)
                         chunk.setBlock(x, y, z, "space_test:dirt");
                     } else {
+                        // Grass on top
                         chunk.setBlock(x, y, z, "space_test:grass");
                     }
                 }
 
-                // Random trees/decorations
-                if (groundHeight > 0 && groundHeight < Chunk.HEIGHT - 5) {
+                // Random trees
+                if (groundHeight < Chunk.HEIGHT - 8) {
                     Random r = new Random(seed + worldX * 374761393L + worldZ * 668265263L);
-                    if (r.nextFloat() < 0.02f) { // 2% chance
-                        // Simple tree
-                        int treeHeight = 4 + r.nextInt(3);
-                        for (int ty = 0; ty < treeHeight; ty++) {
-                            chunk.setBlock(x, groundHeight + ty, z, "space_test:wood");
-                        }
-                        // Leaves
-                        for (int lx = -2; lx <= 2; lx++) {
-                            for (int lz = -2; lz <= 2; lz++) {
-                                for (int ly = 0; ly < 3; ly++) {
-                                    if (lx == 0 && lz == 0 && ly < 2) continue;
-                                    int leafX = x + lx;
-                                    int leafZ = z + lz;
-                                    int leafY = groundHeight + treeHeight - 1 + ly;
-                                    if (leafX >= 0 && leafX < Chunk.SIZE &&
-                                            leafZ >= 0 && leafZ < Chunk.SIZE &&
-                                            leafY < Chunk.HEIGHT) {
-                                        chunk.setBlock(leafX, leafY, leafZ, "space_test:leaves");
-                                    }
-                                }
-                            }
-                        }
+                    if (r.nextFloat() < 0.015f) { // 1.5% chance - less trees
+                        generateTree(chunk, x, groundHeight + 1, z, r);
                     }
                 }
             }
         }
 
         chunk.clearDirty();
+    }
+
+    private void generateTree(Chunk chunk, int x, int y, int z, Random r) {
+        int treeHeight = 4 + r.nextInt(3);
+
+        // Trunk
+        for (int ty = 0; ty < treeHeight; ty++) {
+            if (y + ty < Chunk.HEIGHT) {
+                chunk.setBlock(x, y + ty, z, "space_test:wood");
+            }
+        }
+
+        // Leaves (smaller canopy to reduce block count)
+        int leafY = y + treeHeight - 1;
+        for (int lx = -1; lx <= 1; lx++) {
+            for (int lz = -1; lz <= 1; lz++) {
+                for (int ly = 0; ly < 2; ly++) {
+                    // Skip center trunk
+                    if (lx == 0 && lz == 0 && ly == 0) continue;
+
+                    int leafX = x + lx;
+                    int leafZ = z + lz;
+                    int finalY = leafY + ly;
+
+                    if (leafX >= 0 && leafX < Chunk.SIZE &&
+                            leafZ >= 0 && leafZ < Chunk.SIZE &&
+                            finalY < Chunk.HEIGHT) {
+                        chunk.setBlock(leafX, finalY, leafZ, "space_test:leaves");
+                    }
+                }
+            }
+        }
     }
 }

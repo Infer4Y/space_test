@@ -11,6 +11,9 @@ public class GreedyMesher {
 
     private static final int MAX_QUAD_SIZE = 4;
 
+    // IMPORTANT: Use the correct air block ID
+    private static final String AIR = "space_test:air";
+
     public static class Quad {
         public int x, y, z;
         public int w, h;
@@ -63,10 +66,10 @@ public class GreedyMesher {
             for (int x = 0; x < Chunk.SIZE; x++) {
                 for (int z = 0; z < Chunk.SIZE; z++) {
                     String block = blocks[x][y][z];
-                    if (block.equals("space_test:air")) continue;
+                    if (block.equals(AIR)) continue;
 
                     int checkY = y + dir;
-                    if (checkY < 0 || checkY >= Chunk.HEIGHT || blocks[x][checkY][z].equals("space_test:air")) {
+                    if (checkY < 0 || checkY >= Chunk.HEIGHT || blocks[x][checkY][z].equals(AIR)) {
                         Block blockObj = Registries.BLOCKS.get(block);
                         if (blockObj != null) {
                             mask[x][z] = true;
@@ -76,7 +79,6 @@ public class GreedyMesher {
                 }
             }
 
-            // Greedy merge
             for (int x = 0; x < Chunk.SIZE; x++) {
                 for (int z = 0; z < Chunk.SIZE; ) {
                     if (!mask[x][z]) {
@@ -86,14 +88,12 @@ public class GreedyMesher {
 
                     int tex = texMask[x][z];
 
-                    // Width along X
                     int w = 1;
                     while (x + w < Chunk.SIZE && w < MAX_QUAD_SIZE &&
                             mask[x + w][z] && texMask[x + w][z] == tex) {
                         w++;
                     }
 
-                    // Height along Z
                     int h = 1;
                     boolean done = false;
                     while (z + h < Chunk.SIZE && h < MAX_QUAD_SIZE && !done) {
@@ -106,7 +106,6 @@ public class GreedyMesher {
                         if (!done) h++;
                     }
 
-                    // FIXED: Correct parameter order (w, h not h, w)
                     quads.add(new Quad(x, y, z, w, h, 1, dir, tex, brightness));
 
                     for (int i = 0; i < w; i++) {
@@ -138,10 +137,10 @@ public class GreedyMesher {
             for (int x = 0; x < Chunk.SIZE; x++) {
                 for (int y = 0; y < Chunk.HEIGHT; y++) {
                     String block = blocks[x][y][z];
-                    if (block.equals("minecraft:air")) continue;
+                    if (block.equals(AIR)) continue;  // FIXED
 
                     int checkZ = z + dir;
-                    if (checkZ < 0 || checkZ >= Chunk.SIZE || blocks[x][y][checkZ].equals("space_test:air")) {
+                    if (checkZ < 0 || checkZ >= Chunk.SIZE || blocks[x][y][checkZ].equals(AIR)) {
                         Block blockObj = Registries.BLOCKS.get(block);
                         if (blockObj != null) {
                             mask[x][y] = true;
@@ -160,14 +159,12 @@ public class GreedyMesher {
 
                     int tex = texMask[x][y];
 
-                    // Width along X
                     int w = 1;
                     while (x + w < Chunk.SIZE && w < MAX_QUAD_SIZE &&
                             mask[x + w][y] && texMask[x + w][y] == tex) {
                         w++;
                     }
 
-                    // Height along Y
                     int h = 1;
                     boolean done = false;
                     while (y + h < Chunk.HEIGHT && h < MAX_QUAD_SIZE && !done) {
@@ -211,10 +208,10 @@ public class GreedyMesher {
             for (int z = 0; z < Chunk.SIZE; z++) {
                 for (int y = 0; y < Chunk.HEIGHT; y++) {
                     String block = blocks[x][y][z];
-                    if (block.equals("space_test:air")) continue;
+                    if (block.equals(AIR)) continue;  // FIXED
 
                     int checkX = x + dir;
-                    if (checkX < 0 || checkX >= Chunk.SIZE || blocks[checkX][y][z].equals("space_test:air")) {
+                    if (checkX < 0 || checkX >= Chunk.SIZE || blocks[checkX][y][z].equals(AIR)) {
                         Block blockObj = Registries.BLOCKS.get(block);
                         if (blockObj != null) {
                             mask[z][y] = true;
@@ -233,14 +230,12 @@ public class GreedyMesher {
 
                     int tex = texMask[z][y];
 
-                    // Width along Z
                     int w = 1;
                     while (z + w < Chunk.SIZE && w < MAX_QUAD_SIZE &&
                             mask[z + w][y] && texMask[z + w][y] == tex) {
                         w++;
                     }
 
-                    // Height along Y
                     int h = 1;
                     boolean done = false;
                     while (y + h < Chunk.HEIGHT && h < MAX_QUAD_SIZE && !done) {
