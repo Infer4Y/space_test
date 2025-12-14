@@ -3,7 +3,11 @@ package xyz.ignite4inferneo.space_test.client;
 import java.awt.*;
 import java.awt.event.KeyEvent;
 
+/**
+ * Client-side configuration and settings
+ */
 public class ClientSettings {
+    // Window settings
     public static Dimension windowSize = new Dimension(1280, 720);
     public static boolean showFPS = true;
 
@@ -18,24 +22,14 @@ public class ClientSettings {
 
     // UI keys
     public static int KEY_INVENTORY = KeyEvent.VK_E;
-    public static int KEY_TOGGLE_GREEDY = KeyEvent.VK_G;
     public static int KEY_TOGGLE_MOUSE = KeyEvent.VK_ESCAPE;
-
-    // Arrow key look (backup)
-    public static int KEY_LOOK_LEFT = KeyEvent.VK_LEFT;
-    public static int KEY_LOOK_RIGHT = KeyEvent.VK_RIGHT;
-    public static int KEY_LOOK_UP = KeyEvent.VK_UP;
-    public static int KEY_LOOK_DOWN = KeyEvent.VK_DOWN;
+    public static int KEY_TOGGLE_FPS = KeyEvent.VK_F3;
 
     // Camera settings
-    public static double MOVE_SPEED = 0.5; // Units per frame
+    public static double MOVE_SPEED = 0.3;
     public static double LOOK_SPEED = 0.5;
-    public static double MOUSE_SENSITIVITY = 0.0025;
+    public static double MOUSE_SENSITIVITY = 0.003;
 
-    // Pixel scale controls
-    public static int KEY_INCREASE_SCALE = KeyEvent.VK_EQUALS; // + key
-    public static int KEY_DECREASE_SCALE = KeyEvent.VK_MINUS; // - key
-    public static int KEY_TOGGLE_FPS = KeyEvent.VK_F3;
-    public static int MIN_PIXEL_SCALE = 1;
-    public static int MAX_PIXEL_SCALE = 16;
+    // Render settings
+    public static int RENDER_DISTANCE = 8; // chunks
 }
