@@ -8,8 +8,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Represents the game world, managing chunks and blocks.
- * This is common code that runs on both client and server.
+ * Represents the game world, managing chunks, blocks, and entities
  */
 public class World {
     private static final int CHUNK_SIZE = 16;
@@ -17,10 +16,19 @@ public class World {
 
     private final Map<Long, Chunk> chunks = new HashMap<>();
     private final IWorldGenerator generator;
+    private final EntityManager entityManager;
     private long tickCount = 0;
 
     public World(IWorldGenerator generator) {
         this.generator = generator;
+        this.entityManager = new EntityManager();
+    }
+
+    /**
+     * Get the entity manager for this world
+     */
+    public EntityManager getEntityManager() {
+        return entityManager;
     }
 
     /**
@@ -100,6 +108,9 @@ public class World {
     public void tick() {
         tickCount++;
         EventBus.fire(new xyz.ignite4inferneo.space_test.api.event.TickEvent(tickCount));
+
+        // Tick entities at 20 TPS (each tick is 0.05 seconds)
+        entityManager.tick(0.05);
     }
 
     /**
