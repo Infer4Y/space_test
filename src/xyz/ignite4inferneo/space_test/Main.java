@@ -5,7 +5,7 @@ import xyz.ignite4inferneo.space_test.client.Window;
 import xyz.ignite4inferneo.space_test.client.input.KeyBindings;
 import xyz.ignite4inferneo.space_test.client.input.KeyInput;
 import xyz.ignite4inferneo.space_test.common.VanillaBlocks;
-import xyz.ignite4inferneo.space_test.common.world.ImprovedWorldGenerator;  // CHANGED
+import xyz.ignite4inferneo.space_test.common.world.ImprovedWorldGenerator;
 import xyz.ignite4inferneo.space_test.common.world.World;
 
 public class Main {
@@ -20,6 +20,9 @@ public class Main {
         System.out.println("[Init] Registering vanilla blocks...");
         VanillaBlocks.register();
 
+        System.out.println("[Init] Registering vanilla recipes...");
+        xyz.ignite4inferneo.space_test.common.VanillaRecipes.register();
+
         System.out.println("[Init] Loading mods...");
         loadMods();
 
@@ -27,7 +30,6 @@ public class Main {
         Registries.freezeAll();
 
         System.out.println("[Init] Creating world with improved terrain...");
-        // CHANGED: Use ImprovedWorldGenerator instead of DefaultWorldGenerator
         world = new World(new ImprovedWorldGenerator(System.currentTimeMillis()));
 
         System.out.println("[Init] Initializing client...");
@@ -42,12 +44,19 @@ public class Main {
         System.out.println("  WASD - Move");
         System.out.println("  Mouse - Look");
         System.out.println("  Space - Jump");
+        System.out.println("  Left Ctrl - Sprint");
+        System.out.println("  Shift - Sneak");
         System.out.println("  Left Click - Break Block");
         System.out.println("  Right Click - Place Block");
+        System.out.println("  E - Toggle Inventory");
         System.out.println("  ESC - Toggle Mouse Lock");
         System.out.println("  F3 - Toggle Debug Info");
+        System.out.println("  1-9 - Select Hotbar Slot");
         System.out.println("");
-        System.out.println("Explore mountains, valleys, and rivers!");
+        System.out.println("New Features:");
+        System.out.println("  - Sprint to move faster (drains stamina)");
+        System.out.println("  - Sneak to move slowly and quietly");
+        System.out.println("  - Watch your stamina bar!");
     }
 
     private static void loadMods() {

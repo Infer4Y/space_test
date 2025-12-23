@@ -1,9 +1,11 @@
 package xyz.ignite4inferneo.space_test.common.entity;
 
 import xyz.ignite4inferneo.space_test.common.world.World;
+import java.util.List;
 
 /**
  * Base class for mobs (hostile/passive creatures)
+ * Compatible with new Entity system
  */
 public abstract class MobEntity extends LivingEntity {
 
@@ -76,7 +78,7 @@ public abstract class MobEntity extends LivingEntity {
         if (dead) return;
 
         // Find nearest player
-        var entities = world.getEntityManager().getEntitiesNear(x, y, z, detectionRange);
+        List<Entity> entities = world.getEntityManager().getEntitiesNear(x, y, z, detectionRange);
 
         Entity closest = null;
         double closestDist = Double.MAX_VALUE;

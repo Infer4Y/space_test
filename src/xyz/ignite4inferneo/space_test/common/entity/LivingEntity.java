@@ -158,16 +158,34 @@ public abstract class LivingEntity extends Entity {
         this.moveSpeed = speed;
     }
 
+    public float getLookYaw() {
+        return lookYaw;
+    }
+
+    public float getLookPitch() {
+        return lookPitch;
+    }
+
     // Events to override
+
+    /**
+     * Called when entity takes damage
+     */
     protected void onDamage(float amount) {
         // Override in subclasses for damage effects
     }
 
+    /**
+     * Called when entity dies
+     */
     protected void onDeath() {
         dead = true;
         // Override in subclasses for death behavior
     }
 
+    /**
+     * Called when entity respawns
+     */
     protected void onRespawn() {
         dead = false;
         health = maxHealth;

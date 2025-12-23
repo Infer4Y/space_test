@@ -3,14 +3,14 @@ package xyz.ignite4inferneo.space_test.client;
 import xyz.ignite4inferneo.space_test.common.entity.PlayerEntity;
 
 /**
- * Client-side player controller
- * Handles local player input and camera
+ * Client-side player controller for PlayerEntity
+ * Simplified since PlayerEntity now handles most of the logic
  */
 public class PlayerController {
 
     private final PlayerEntity player;
 
-    // Camera
+    // Camera angles (separate from player's look direction for client prediction)
     private double yaw = 0;
     private double pitch = 0;
 
@@ -19,10 +19,10 @@ public class PlayerController {
     }
 
     /**
-     * Apply movement input
+     * Apply movement input to player
      */
-    public void applyMovement(boolean forward, boolean back, boolean left, boolean right, double deltaTime) {
-        player.applyMovementInput(forward, back, left, right, deltaTime);
+    public void applyMovement(double forward, double strafe, double deltaTime) {
+        player.applyMovementInput(forward, strafe, deltaTime);
     }
 
     /**
@@ -44,14 +44,28 @@ public class PlayerController {
     }
 
     /**
-     * Get camera position
+     * Set sprint state
+     */
+    public void setSprinting(boolean sprinting) {
+        player.setSprinting(sprinting);
+    }
+
+    /**
+     * Set sneak state
+     */
+    public void setSneaking(boolean sneaking) {
+        player.setSneaking(sneaking);
+    }
+
+    /**
+     * Get camera position (from player's eyes)
      */
     public double[] getCameraPosition() {
         return player.getCameraPosition();
     }
 
     /**
-     * Get camera direction
+     * Get camera direction (from player's look direction)
      */
     public double[] getCameraDirection() {
         return player.getLookDirection();

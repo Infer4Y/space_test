@@ -1,12 +1,13 @@
 package xyz.ignite4inferneo.space_test.client;
 
+import xyz.ignite4inferneo.space_test.client.gui.GUIManager;
 import xyz.ignite4inferneo.space_test.client.gui.InventoryInteraction;
 import xyz.ignite4inferneo.space_test.client.gui.InventoryRenderer;
 import xyz.ignite4inferneo.space_test.client.input.KeyBindings;
 import xyz.ignite4inferneo.space_test.client.input.KeyInput;
 import xyz.ignite4inferneo.space_test.client.input.MouseInput;
 import xyz.ignite4inferneo.space_test.client.renderer.ThreadedOptimizedRenderer;
-import xyz.ignite4inferneo.space_test.common.entity.Player;
+import xyz.ignite4inferneo.space_test.common.entity.PlayerEntity;
 import xyz.ignite4inferneo.space_test.common.inventory.Inventory;
 import xyz.ignite4inferneo.space_test.common.inventory.ItemStack;
 import xyz.ignite4inferneo.space_test.common.util.RayCast;
@@ -14,20 +15,22 @@ import xyz.ignite4inferneo.space_test.common.world.World;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.KeyEvent;
 import java.awt.image.BufferStrategy;
 import java.util.LinkedList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Main game window with multi-threaded rendering
+ * Main game window with PlayerEntity integration
  */
 public class Window {
     private JFrame displayWindow;
     private ThreadedOptimizedRenderer renderer;
     private World world;
-    private Player player;
+    private PlayerEntity player;
     private Inventory inventory;
-    private InventoryInteraction inventoryInteraction;
+    private GUIManager guiManager;
+    private BlockInteractionHandler blockInteractionHandler;
 
     private java.util.Queue<Integer> fpsHistory = new LinkedList<>();
     private int historySize = 100;
@@ -51,7 +54,10 @@ public class Window {
     public Window(World world) {
         this.world = world;
         this.inventory = new Inventory();
-        this.inventoryInteraction = new InventoryInteraction();
+        this.guiManager = new GUIManager();
+        this.blockInteractionHandler = new BlockInteractionHandler(world, player);
+
+        guiManager.getInventoryInteraction().setWorld(world);
 
         // Give player some starting items
         inventory.addItem("space_test:stone", 64);
@@ -59,9 +65,9 @@ public class Window {
         inventory.addItem("space_test:grass", 32);
         inventory.addItem("space_test:wood", 16);
 
-        // Create player at spawn position
+        // Create player at spawn position using new PlayerEntity
         int[] spawnPos = world.getChunk(0, 0) != null ? new int[]{0, 70, 0} : new int[]{0, 70, 0};
-        this.player = new Player(world, spawnPos[0], spawnPos[1], spawnPos[2]);
+        this.player = PlayerEntity.createLocal(world, spawnPos[0], spawnPos[1], spawnPos[2], "Player");
 
         displayWindow = new JFrame("Space Test - Voxel Engine [MULTITHREADED]");
         displayWindow.setSize(ClientSettings.windowSize);
@@ -108,7 +114,7 @@ public class Window {
         });
         renderTimer.start();
 
-        // Start physics tick thread (60 TPS)
+        // Start physics tick thread (60 TPS) - PlayerEntity handles its own physics
         Thread physicsThread = new Thread(() -> {
             long lastPhysicsTime = System.nanoTime();
             while (true) {
@@ -146,41 +152,51 @@ public class Window {
     private void handleInput(double deltaTime) {
         // Toggle inventory
         if (KeyBindings.INVENTORY.isPressed()) {
-            inventoryOpen = !inventoryOpen;
-            MouseInput.setMouseLocked(!inventoryOpen);
-
-            if (!inventoryOpen) {
-                // Return held item when closing inventory
-                inventoryInteraction.returnHeldItem(inventory);
+            if (guiManager.hasOpenGUI()) {
+                guiManager.returnHeldItems(inventory);
+                guiManager.closeGUI();
+                MouseInput.setMouseLocked(true);
+            } else {
+                guiManager.openGUI(GUIManager.GUIType.INVENTORY);
+                MouseInput.setMouseLocked(false);
             }
         }
 
         // Handle inventory interactions
-        if (inventoryOpen) {
-            // Update mouse position for cursor rendering
-            inventoryInteraction.updateMousePosition(MouseInput.getMouseX(), MouseInput.getMouseY());
+        if (guiManager.hasOpenGUI()) {
+            guiManager.updateMousePosition(MouseInput.getMouseX(), MouseInput.getMouseY());
 
-            // Handle clicks in inventory
+            // Update player position for item dropping
+            double[] pos = player.getCameraPosition();
+            guiManager.getInventoryInteraction().setPlayerPosition(pos[0], pos[1], pos[2]);
+
             if (MouseInput.isButtonPressed(0)) { // Left click
-                inventoryInteraction.handleClick(inventory,
-                        displayWindow.getWidth(), displayWindow.getHeight(),
+                guiManager.handleClick(inventory, displayWindow.getWidth(), displayWindow.getHeight(),
                         MouseInput.getMouseX(), MouseInput.getMouseY(), false);
             }
             if (MouseInput.isButtonPressed(2)) { // Right click
-                inventoryInteraction.handleClick(inventory,
-                        displayWindow.getWidth(), displayWindow.getHeight(),
+                guiManager.handleClick(inventory, displayWindow.getWidth(), displayWindow.getHeight(),
                         MouseInput.getMouseX(), MouseInput.getMouseY(), true);
             }
 
-            return; // Skip game controls when inventory is open
+            // Check if player moved too far from GUI block
+            double[] playerPos = player.getFeetPosition();
+            if (!guiManager.isInRangeOfGUIBlock(playerPos[0], playerPos[1], playerPos[2])) {
+                guiManager.returnHeldItems(inventory);
+                guiManager.closeGUI();
+                MouseInput.setMouseLocked(true);
+            }
+
+            return; // Skip game controls when GUI is open
         }
+
 
         // Toggle mouse lock
         if (KeyBindings.TOGGLE_MOUSE_LOCK.isPressed()) {
             MouseInput.setMouseLocked(!MouseInput.isMouseLocked());
         }
 
-        // Movement input
+        // Movement input using new PlayerEntity methods
         double forward = 0, strafe = 0;
 
         if (KeyBindings.MOVE_FORWARD.isDown()) forward += 1;
@@ -188,16 +204,21 @@ public class Window {
         if (KeyBindings.MOVE_RIGHT.isDown()) strafe += 1;
         if (KeyBindings.MOVE_LEFT.isDown()) strafe -= 1;
 
-        if (forward != 0 || strafe != 0) {
-            double length = Math.sqrt(forward * forward + strafe * strafe);
-            forward /= length;
-            strafe /= length;
+        // Always apply movement (handles friction when no input)
+        player.applyMovementInput(forward, strafe, deltaTime);
 
-            double moveSpeed = player.isOnGround() ? 30.0 : 10.0;
-            double dx = Math.sin(yaw) * forward + Math.cos(yaw) * strafe;
-            double dz = Math.cos(yaw) * forward - Math.sin(yaw) * strafe;
+        // Sprint (Left Ctrl)
+        if (KeyInput.isDown(KeyEvent.VK_CONTROL)) {
+            player.setSprinting(true);
+        } else {
+            player.setSprinting(false);
+        }
 
-            player.addMovement(dx, dz, moveSpeed * deltaTime);
+        // Sneak (Shift)
+        if (KeyInput.isDown(KeyEvent.VK_SHIFT)) {
+            player.setSneaking(true);
+        } else {
+            player.setSneaking(false);
         }
 
         // Jumping
@@ -213,10 +234,13 @@ public class Window {
                 double lookSpeed = ClientSettings.MOUSE_SENSITIVITY;
                 yaw += dx * lookSpeed;
                 pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch + dy * lookSpeed));
+
+                // Update PlayerEntity look direction
+                player.setLookDirection((float)yaw, (float)pitch);
             }
         }
 
-        // Update renderer camera
+        // Update renderer camera from PlayerEntity
         double[] camPos = player.getCameraPosition();
         renderer.x = camPos[0];
         renderer.y = camPos[1];
@@ -232,6 +256,31 @@ public class Window {
         }
 
         if (MouseInput.isButtonPressed(2)) {
+            // First try to interact with block
+            if (blockInteractionHandler.handleBlockInteraction(currentTarget)) {
+                // Block was interacted with, open GUI if applicable
+                String guiType = blockInteractionHandler.getOpenGUI();
+                if (guiType != null) {
+                    int[] pos = blockInteractionHandler.getGUIBlockPosition();
+                    switch (guiType) {
+                        case "crafting_table":
+                            guiManager.openGUI(GUIManager.GUIType.CRAFTING_TABLE, pos[0], pos[1], pos[2]);
+                            MouseInput.setMouseLocked(false);
+                            break;
+                        case "furnace":
+                            guiManager.openGUI(GUIManager.GUIType.FURNACE, pos[0], pos[1], pos[2]);
+                            MouseInput.setMouseLocked(false);
+                            break;
+                        case "chest":
+                            guiManager.openGUI(GUIManager.GUIType.CHEST, pos[0], pos[1], pos[2]);
+                            MouseInput.setMouseLocked(false);
+                            break;
+                    }
+                }
+                return; // Don't place block
+            }
+
+            // If not interacted, place block normally
             placeBlock();
         }
 
@@ -250,36 +299,20 @@ public class Window {
 
     private void updateBlockTarget() {
         double[] pos = player.getCameraPosition();
-        double[] dir = getCameraDirection();
+        double[] dir = player.getLookDirection();
 
         currentTarget = RayCast.cast(world, pos[0], pos[1], pos[2],
                 dir[0], dir[1], dir[2], 5.0);
-    }
-
-    private double[] getCameraDirection() {
-        double cosPitch = Math.cos(pitch);
-        double sinPitch = Math.sin(pitch);
-        double cosYaw = Math.cos(yaw);
-        double sinYaw = Math.sin(yaw);
-
-        return new double[]{
-                sinYaw * cosPitch,
-                -sinPitch,
-                cosYaw * cosPitch
-        };
     }
 
     private void breakBlock() {
         if (currentTarget != null && currentTarget.hit) {
             String blockId = world.getBlock(currentTarget.x, currentTarget.y, currentTarget.z);
 
-            // Don't break air
             if (blockId.equals("space_test:air")) return;
 
-            // Add to inventory
             inventory.addItem(blockId, 1);
 
-            // Remove block
             world.setBlock(currentTarget.x, currentTarget.y, currentTarget.z, "space_test:air");
             renderer.markChunkDirty(currentTarget.x >> 4, currentTarget.z >> 4);
         }
@@ -300,7 +333,6 @@ public class Window {
             double dz = placeZ + 0.5 - pos[2];
             if (dx*dx + dy*dy + dz*dz < 2.0) return;
 
-            // Place block and remove from inventory
             world.setBlock(placeX, placeY, placeZ, selectedStack.getBlockId());
             inventory.removeItem(selectedStack.getBlockId(), 1);
             renderer.markChunkDirty(placeX >> 4, placeZ >> 4);
@@ -330,7 +362,7 @@ public class Window {
             graphics.drawImage(renderer.getScreenBuffer(), 0, 0, null);
         }
 
-        // Draw UI with threading stats
+        // Draw UI with PlayerEntity stats
         if (ClientSettings.showFPS) {
             graphics.setColor(Color.WHITE);
             graphics.setFont(new Font("Monospaced", Font.PLAIN, 12));
@@ -347,13 +379,29 @@ public class Window {
             graphics.drawString("On Ground: " + player.isOnGround(), 10, y);
             y += 20;
 
+            // PlayerEntity specific stats
+            graphics.drawString(String.format("Health: %.1f/%.1f", player.getHealth(), player.getMaxHealth()), 10, y);
+            y += 20;
+            graphics.drawString(String.format("Stamina: %.0f/%.0f", player.getStamina(), player.getMaxStamina()), 10, y);
+            y += 20;
+
+            if (player.isSprinting()) {
+                graphics.setColor(Color.YELLOW);
+                graphics.drawString("SPRINTING", 10, y);
+                graphics.setColor(Color.WHITE);
+                y += 20;
+            }
+            if (player.isSneaking()) {
+                graphics.setColor(Color.CYAN);
+                graphics.drawString("SNEAKING", 10, y);
+                graphics.setColor(Color.WHITE);
+                y += 20;
+            }
+
             // Threading stats
             int rendered = renderer.getChunksRendered();
             int meshing = renderer.getChunksMeshing();
             int cached = renderer.getCachedMeshCount();
-            int subdivided = renderer.getQuadsSubdivided();
-            int quadsRendered = renderer.getQuadsRendered();
-            int quadsCulled = renderer.getQuadsCulled();
 
             graphics.drawString("Chunks Rendered: " + rendered, 10, y);
             y += 20;
@@ -362,28 +410,11 @@ public class Window {
             graphics.drawString("Cached Meshes: " + cached, 10, y);
             y += 20;
 
-            graphics.drawString("Quads: " + quadsRendered + " rendered, " + quadsCulled + " culled", 10, y);
-            y += 20;
-
-            if (subdivided > 0) {
-                graphics.setColor(new Color(255, 200, 0));
-                graphics.drawString("Quads Subdivided: " + subdivided, 10, y);
-                graphics.setColor(Color.WHITE);
-                y += 20;
-            }
-
-            // Show loading indicator if chunks are being meshed
             if (meshing > 0) {
                 graphics.setColor(new Color(255, 255, 0, 200));
                 graphics.drawString("⚡ Loading chunks...", 10, y);
-            } else if (cached < 100) {
-                graphics.setColor(new Color(0, 255, 0, 200));
-                graphics.drawString("✓ Ready", 10, y);
             }
             graphics.setColor(Color.WHITE);
-            y += 20;
-
-            graphics.drawString("CPU Cores: " + Runtime.getRuntime().availableProcessors(), 10, y);
             y += 20;
 
             if (currentTarget != null && currentTarget.hit) {
@@ -395,19 +426,12 @@ public class Window {
             ItemStack selected = inventory.getSelectedStack();
             if (!selected.isEmpty()) {
                 graphics.drawString("Selected: " + selected, 10, y);
-                y += 20;
             }
-
-            // Inventory stats
-            int emptySlots = inventory.getEmptySlots();
-            graphics.drawString("Inventory: " + (Inventory.TOTAL_SIZE - emptySlots) + "/" + Inventory.TOTAL_SIZE, 10, y);
         }
 
         // Render inventory or hotbar
-        if (inventoryOpen) {
-            InventoryRenderer.renderInventory(graphics, inventory, displayWindow.getWidth(), displayWindow.getHeight());
-            // Render held item on top
-            inventoryInteraction.renderHeldItem(graphics);
+        if (guiManager.hasOpenGUI()) {
+            guiManager.render(graphics, inventory, displayWindow.getWidth(), displayWindow.getHeight());
         } else {
             InventoryRenderer.renderHotbar(graphics, inventory, displayWindow.getWidth(), displayWindow.getHeight());
         }

@@ -658,6 +658,7 @@ public class ThreadedOptimizedRenderer {
     }
 
     public int getChunksRendered() {
+
         return chunksRendered;
     }
 

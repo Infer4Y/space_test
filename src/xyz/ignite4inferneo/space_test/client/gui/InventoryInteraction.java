@@ -1,7 +1,9 @@
 package xyz.ignite4inferneo.space_test.client.gui;
 
+import xyz.ignite4inferneo.space_test.common.entity.ItemEntity;
 import xyz.ignite4inferneo.space_test.common.inventory.Inventory;
 import xyz.ignite4inferneo.space_test.common.inventory.ItemStack;
+import xyz.ignite4inferneo.space_test.common.world.World;
 
 import java.awt.*;
 
@@ -9,7 +11,6 @@ import java.awt.*;
  * Handles inventory interaction (clicking, dragging, moving items)
  */
 public class InventoryInteraction {
-
     private static final int SLOT_SIZE = 36;
     private static final int SLOT_PADDING = 4;
 
@@ -22,19 +23,34 @@ public class InventoryInteraction {
     private int mouseX = 0;
     private int mouseY = 0;
 
+    // For dropping items
+    private World world;
+    private double playerX, playerY, playerZ;
+
+    public void setWorld(World world) {
+        this.world = world;
+    }
+
+    public void setPlayerPosition(double x, double y, double z) {
+        this.playerX = x;
+        this.playerY = y;
+        this.playerZ = z;
+    }
+
     /**
      * Handle mouse click in inventory
      */
-    public void handleClick(Inventory inventory, int screenWidth, int screenHeight, int mouseX, int mouseY, boolean rightClick) {
+    public void handleClick(Inventory inventory, int screenWidth, int screenHeight,
+                            int mouseX, int mouseY, boolean rightClick) {
         this.mouseX = mouseX;
         this.mouseY = mouseY;
 
         int slot = getSlotAt(screenWidth, screenHeight, mouseX, mouseY);
 
         if (slot == -1) {
-            // Clicked outside inventory - drop held item if any
+            // Clicked outside inventory - drop held item
             if (!heldStack.isEmpty()) {
-                // TODO: Drop item into world
+                dropItem(heldStack);
                 heldStack = ItemStack.EMPTY;
                 heldSlot = -1;
                 isDragging = false;
@@ -50,7 +66,7 @@ public class InventoryInteraction {
     }
 
     /**
-     * Left click: Pick up entire stack or swap
+     * Left click: Pick up entire stack or swap/stack
      */
     private void handleLeftClick(Inventory inventory, int slot) {
         ItemStack slotStack = inventory.getStack(slot);
@@ -64,9 +80,9 @@ public class InventoryInteraction {
                 isDragging = true;
             }
         } else {
-            // Place or swap
+            // Placing or swapping
             if (slotStack.isEmpty()) {
-                // Place entire stack
+                // Place entire held stack
                 inventory.setStack(slot, heldStack);
                 heldStack = ItemStack.EMPTY;
                 heldSlot = -1;
@@ -76,20 +92,22 @@ public class InventoryInteraction {
                 int space = slotStack.getMaxStackSize() - slotStack.getCount();
                 if (space > 0) {
                     int toAdd = Math.min(space, heldStack.getCount());
-                    inventory.setStack(slot, new ItemStack(slotStack.getBlockId(), slotStack.getCount() + toAdd));
+                    inventory.setStack(slot, slotStack.withCount(slotStack.getCount() + toAdd));
 
-                    if (heldStack.getCount() <= toAdd) {
+                    int remaining = heldStack.getCount() - toAdd;
+                    if (remaining <= 0) {
                         heldStack = ItemStack.EMPTY;
                         heldSlot = -1;
                         isDragging = false;
                     } else {
-                        heldStack = heldStack.shrink(toAdd);
+                        heldStack = heldStack.withCount(remaining);
                     }
                 }
             } else {
                 // Swap stacks
+                ItemStack temp = slotStack;
                 inventory.setStack(slot, heldStack);
-                heldStack = slotStack;
+                heldStack = temp;
                 heldSlot = slot;
             }
         }
@@ -106,28 +124,37 @@ public class InventoryInteraction {
             if (!slotStack.isEmpty() && slotStack.getCount() > 1) {
                 int halfCount = (slotStack.getCount() + 1) / 2;
                 heldStack = new ItemStack(slotStack.getBlockId(), halfCount);
-                inventory.setStack(slot, slotStack.shrink(halfCount));
+                inventory.setStack(slot, slotStack.withCount(slotStack.getCount() - halfCount));
                 heldSlot = slot;
+                isDragging = true;
+            } else if (!slotStack.isEmpty() && slotStack.getCount() == 1) {
+                // Pick up single item
+                heldStack = slotStack;
+                heldSlot = slot;
+                inventory.setStack(slot, ItemStack.EMPTY);
                 isDragging = true;
             }
         } else {
             // Place one item
             if (slotStack.isEmpty()) {
-                // Place single item
+                // Place single item in empty slot
                 inventory.setStack(slot, new ItemStack(heldStack.getBlockId(), 1));
-                heldStack = heldStack.shrink(1);
-                if (heldStack.isEmpty()) {
+                heldStack = heldStack.withCount(heldStack.getCount() - 1);
+                if (heldStack.getCount() <= 0) {
+                    heldStack = ItemStack.EMPTY;
                     heldSlot = -1;
                     isDragging = false;
                 }
-            } else if (slotStack.getBlockId().equals(heldStack.getBlockId()) &&
-                    slotStack.getCount() < slotStack.getMaxStackSize()) {
+            } else if (slotStack.getBlockId().equals(heldStack.getBlockId())) {
                 // Add one to existing stack
-                inventory.setStack(slot, slotStack.grow(1));
-                heldStack = heldStack.shrink(1);
-                if (heldStack.isEmpty()) {
-                    heldSlot = -1;
-                    isDragging = false;
+                if (slotStack.getCount() < slotStack.getMaxStackSize()) {
+                    inventory.setStack(slot, slotStack.withCount(slotStack.getCount() + 1));
+                    heldStack = heldStack.withCount(heldStack.getCount() - 1);
+                    if (heldStack.getCount() <= 0) {
+                        heldStack = ItemStack.EMPTY;
+                        heldSlot = -1;
+                        isDragging = false;
+                    }
                 }
             }
         }
@@ -206,6 +233,23 @@ public class InventoryInteraction {
     }
 
     /**
+     * Drop item into world as entity
+     */
+    private void dropItem(ItemStack stack) {
+        if (world == null || stack.isEmpty()) return;
+
+        // Calculate drop position (in front of player)
+        double dropX = playerX;
+        double dropY = playerY + 1.0; // Above player
+        double dropZ = playerZ;
+
+        ItemEntity itemEntity = new ItemEntity(world, dropX, dropY, dropZ, stack);
+        world.getEntityManager().addEntity(itemEntity);
+
+        System.out.println("[Inventory] Dropped " + stack);
+    }
+
+    /**
      * Check if currently dragging an item
      */
     public boolean isDragging() {
@@ -217,6 +261,14 @@ public class InventoryInteraction {
      */
     public ItemStack getHeldStack() {
         return heldStack;
+    }
+
+    /**
+     * Set held item stack (for crafting grid interaction)
+     */
+    public void setHeldStack(ItemStack stack) {
+        this.heldStack = stack;
+        this.isDragging = !stack.isEmpty();
     }
 
     /**
@@ -237,9 +289,10 @@ public class InventoryInteraction {
             if (heldSlot != -1 && inventory.getStack(heldSlot).isEmpty()) {
                 inventory.setStack(heldSlot, heldStack);
             } else {
-                // Otherwise add to inventory
+                // Otherwise add to inventory or drop
                 if (!inventory.addItem(heldStack.getBlockId(), heldStack.getCount())) {
-                    // TODO: Drop in world if inventory full
+                    // Inventory full, drop it
+                    dropItem(heldStack);
                 }
             }
             reset();

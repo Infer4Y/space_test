@@ -3,6 +3,9 @@ package xyz.ignite4inferneo.space_test.common;
 import xyz.ignite4inferneo.space_test.api.block.Block;
 import xyz.ignite4inferneo.space_test.api.registry.Registries;
 import xyz.ignite4inferneo.space_test.common.block.BaseBlock;
+import xyz.ignite4inferneo.space_test.common.block.ChestBlock;
+import xyz.ignite4inferneo.space_test.common.block.CraftingTableBlock;
+import xyz.ignite4inferneo.space_test.common.block.FurnaceBlock;
 
 /**
  * Registers all vanilla (base game) blocks.
@@ -64,6 +67,13 @@ public class VanillaBlocks {
                 TEX_WOOD
         ));
 
+        // Wood/Logs
+        Registries.BLOCKS.register("space_test:planks", new BaseBlock(
+                "space_test:planks",
+                "Oak Planks",
+                TEX_WOOD
+        ));
+
         // Leaves (transparent)
         Registries.BLOCKS.register("space_test:leaves", new BaseBlock(
                 "space_test:leaves",
@@ -73,6 +83,18 @@ public class VanillaBlocks {
                 true,   // transparent
                 0.2f    // easy to break
         ));
+
+        // Crafting Table
+        Registries.BLOCKS.register("space_test:crafting_table",
+                new CraftingTableBlock());
+
+        // Furnace
+        Registries.BLOCKS.register("space_test:furnace",
+                new FurnaceBlock());
+
+        // Chest
+        Registries.BLOCKS.register("space_test:chest",
+                new ChestBlock());
 
         System.out.println("[VanillaBlocks] Registered " + Registries.BLOCKS.size() + " blocks");
     }
