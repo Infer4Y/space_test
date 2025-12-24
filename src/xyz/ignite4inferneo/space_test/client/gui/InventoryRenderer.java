@@ -2,13 +2,14 @@ package xyz.ignite4inferneo.space_test.client.gui;
 
 import xyz.ignite4inferneo.space_test.api.block.Block;
 import xyz.ignite4inferneo.space_test.api.registry.Registries;
+import xyz.ignite4inferneo.space_test.client.renderer.ItemIconRenderer;
 import xyz.ignite4inferneo.space_test.common.inventory.Inventory;
 import xyz.ignite4inferneo.space_test.common.inventory.ItemStack;
 
 import java.awt.*;
 
 /**
- * Renders inventory UI
+ * UPDATED: Renders inventory UI with 3D item icons
  */
 public class InventoryRenderer {
 
@@ -42,14 +43,14 @@ public class InventoryRenderer {
             g.setColor(i == inventory.getSelectedSlot() ? Color.WHITE : new Color(139, 139, 139));
             g.drawRect(slotX, slotY, SLOT_SIZE, SLOT_SIZE);
 
-            // Item
+            // Item (NEW: Using 3D renderer)
             ItemStack stack = inventory.getStack(i);
             if (!stack.isEmpty()) {
-                renderItemStack(g, stack, slotX + 2, slotY + 2, SLOT_SIZE - 4);
+                ItemIconRenderer.renderItemIcon(g, stack, slotX + 2, slotY + 2, SLOT_SIZE - 4);
             }
 
             // Slot number
-            g.setColor(Color.WHITE);
+            g.setColor(new Color(255, 255, 255, 180));
             g.setFont(new Font("Arial", Font.PLAIN, 10));
             g.drawString(String.valueOf(i + 1), slotX + 2, slotY + 12);
         }
@@ -88,7 +89,7 @@ public class InventoryRenderer {
 
                 ItemStack stack = inventory.getStack(slot);
                 if (!stack.isEmpty()) {
-                    renderItemStack(g, stack, slotX + 2, slotY + 2, SLOT_SIZE - 4);
+                    ItemIconRenderer.renderItemIcon(g, stack, slotX + 2, slotY + 2, SLOT_SIZE - 4);
                 }
             }
         }
@@ -109,45 +110,15 @@ public class InventoryRenderer {
 
             ItemStack stack = inventory.getStack(i);
             if (!stack.isEmpty()) {
-                renderItemStack(g, stack, slotX + 2, hotbarY + 2, SLOT_SIZE - 4);
+                ItemIconRenderer.renderItemIcon(g, stack, slotX + 2, hotbarY + 2, SLOT_SIZE - 4);
             }
         }
     }
 
-    private static void renderItemStack(Graphics2D g, ItemStack stack, int x, int y, int size) {
-        renderItemStackAt(g, stack, x, y, size);
-    }
-
     /**
-     * Public method to render item stack at position (used by InventoryInteraction)
+     * UPDATED: Public method to render item stack (now uses 3D renderer)
      */
     public static void renderItemStackAt(Graphics2D g, ItemStack stack, int x, int y, int size) {
-        Block block = Registries.BLOCKS.get(stack.getBlockId());
-        if (block == null) return;
-
-        Color color = getBlockColor(stack.getBlockId());
-        g.setColor(color);
-        g.fillRect(x, y, size, size);
-        g.setColor(color.darker());
-        g.drawRect(x, y, size, size);
-
-        if (stack.getCount() > 1) {
-            g.setColor(Color.WHITE);
-            g.setFont(new Font("Arial", Font.BOLD, 12));
-            String countStr = String.valueOf(stack.getCount());
-            int textWidth = g.getFontMetrics().stringWidth(countStr);
-            g.drawString(countStr, x + size - textWidth - 2, y + size - 2);
-        }
-    }
-
-    private static Color getBlockColor(String blockId) {
-        return switch (blockId) {
-            case "space_test:stone" -> new Color(128, 128, 128);
-            case "space_test:dirt" -> new Color(139, 69, 19);
-            case "space_test:grass" -> new Color(34, 139, 34);
-            case "space_test:wood" -> new Color(160, 82, 45);
-            case "space_test:leaves" -> new Color(0, 128, 0);
-            default -> new Color(200, 200, 200);
-        };
+        ItemIconRenderer.renderItemIcon(g, stack, x, y, size);
     }
 }

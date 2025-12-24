@@ -9,7 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Enhanced inventory renderer with 2x2 crafting grid
+ * FIXED: Enhanced inventory renderer with working 2x2 crafting grid
  */
 public class InventoryWithCraftingGUI {
 
@@ -26,9 +26,6 @@ public class InventoryWithCraftingGUI {
         }
     }
 
-    /**
-     * Render inventory with 2x2 crafting grid
-     */
     public void render(Graphics2D g, Inventory inventory, int screenWidth, int screenHeight) {
         int invWidth = Inventory.INVENTORY_COLS * (SLOT_SIZE + SLOT_PADDING) + SLOT_PADDING * 2;
         int invHeight = (Inventory.INVENTORY_ROWS + 1) * (SLOT_SIZE + SLOT_PADDING) + SLOT_PADDING * 3 + 30;
@@ -91,9 +88,6 @@ public class InventoryWithCraftingGUI {
         renderCraftingGrid2x2(g, startX + invWidth + 20, startY + 35);
     }
 
-    /**
-     * Render 2x2 crafting grid
-     */
     private void renderCraftingGrid2x2(Graphics2D g, int startX, int startY) {
         int gridWidth = 2 * (SLOT_SIZE + SLOT_PADDING) + SLOT_PADDING * 2;
         int gridHeight = 2 * (SLOT_SIZE + SLOT_PADDING) + SLOT_PADDING * 2 + 60;
@@ -145,9 +139,6 @@ public class InventoryWithCraftingGUI {
         }
     }
 
-    /**
-     * Handle click - returns true if click was in crafting area
-     */
     public boolean handleCraftingClick(int screenWidth, int screenHeight, int mouseX, int mouseY,
                                        InventoryInteraction invInteraction, boolean rightClick) {
         int invWidth = Inventory.INVENTORY_COLS * (SLOT_SIZE + SLOT_PADDING) + SLOT_PADDING * 2;
@@ -172,9 +163,6 @@ public class InventoryWithCraftingGUI {
         return false;
     }
 
-    /**
-     * Get crafting slot at position
-     */
     private int getCraftingSlot2x2(int startX, int startY, int mouseX, int mouseY) {
         for (int row = 0; row < 2; row++) {
             for (int col = 0; col < 2; col++) {
@@ -190,52 +178,33 @@ public class InventoryWithCraftingGUI {
         return -1;
     }
 
-    /**
-     * Check if output slot clicked
-     */
     private boolean isOutputSlot2x2Clicked(int startX, int startY, int mouseX, int mouseY) {
         int gridWidth = 2 * (SLOT_SIZE + SLOT_PADDING) + SLOT_PADDING * 2;
         int outputX = startX + (gridWidth - SLOT_SIZE) / 2;
         int outputY = startY + 2 * (SLOT_SIZE + SLOT_PADDING) + 25;
 
-        boolean clicked = mouseX >= outputX && mouseX < outputX + SLOT_SIZE &&
+        return mouseX >= outputX && mouseX < outputX + SLOT_SIZE &&
                 mouseY >= outputY && mouseY < outputY + SLOT_SIZE;
-
-        if (clicked) {
-            System.out.println("[Crafting] Output slot clicked at (" + mouseX + ", " + mouseY + ")");
-            System.out.println("[Crafting] Output bounds: X=" + outputX + "-" + (outputX + SLOT_SIZE) +
-                    ", Y=" + outputY + "-" + (outputY + SLOT_SIZE));
-        }
-
-        return clicked;
     }
 
-    /**
-     * Handle click on crafting slot
-     */
     private void handleCraftingSlotClick(int slot, InventoryInteraction invInteraction, boolean rightClick) {
         ItemStack heldStack = invInteraction.getHeldStack();
         ItemStack slotStack = craftingGrid2x2[slot];
 
         if (heldStack.isEmpty()) {
-            // Pick up from slot
             if (!slotStack.isEmpty()) {
                 if (rightClick && slotStack.getCount() > 1) {
-                    // Take half
                     int half = (slotStack.getCount() + 1) / 2;
                     invInteraction.setHeldStack(new ItemStack(slotStack.getBlockId(), half));
                     craftingGrid2x2[slot] = slotStack.withCount(slotStack.getCount() - half);
                 } else {
-                    // Take all
                     invInteraction.setHeldStack(slotStack);
                     craftingGrid2x2[slot] = ItemStack.EMPTY;
                 }
             }
         } else {
-            // Place in slot
             if (slotStack.isEmpty()) {
                 if (rightClick) {
-                    // Place one
                     craftingGrid2x2[slot] = new ItemStack(heldStack.getBlockId(), 1);
                     if (heldStack.getCount() > 1) {
                         invInteraction.setHeldStack(heldStack.withCount(heldStack.getCount() - 1));
@@ -243,14 +212,11 @@ public class InventoryWithCraftingGUI {
                         invInteraction.setHeldStack(ItemStack.EMPTY);
                     }
                 } else {
-                    // Place all
                     craftingGrid2x2[slot] = heldStack;
                     invInteraction.setHeldStack(ItemStack.EMPTY);
                 }
             } else if (slotStack.getBlockId().equals(heldStack.getBlockId())) {
-                // Stack
                 if (rightClick) {
-                    // Add one
                     if (slotStack.getCount() < slotStack.getMaxStackSize()) {
                         craftingGrid2x2[slot] = slotStack.withCount(slotStack.getCount() + 1);
                         if (heldStack.getCount() > 1) {
@@ -260,7 +226,6 @@ public class InventoryWithCraftingGUI {
                         }
                     }
                 } else {
-                    // Add as many as possible
                     int space = slotStack.getMaxStackSize() - slotStack.getCount();
                     int toAdd = Math.min(space, heldStack.getCount());
                     craftingGrid2x2[slot] = slotStack.withCount(slotStack.getCount() + toAdd);
@@ -272,7 +237,6 @@ public class InventoryWithCraftingGUI {
                     }
                 }
             } else {
-                // Different items - swap
                 ItemStack temp = slotStack;
                 craftingGrid2x2[slot] = heldStack;
                 invInteraction.setHeldStack(temp);
@@ -281,64 +245,50 @@ public class InventoryWithCraftingGUI {
     }
 
     /**
-     * Handle output slot click (craft item)
+     * FIXED: Handle output slot click (craft item)
      */
     private void handleOutputClick(InventoryInteraction invInteraction) {
         if (craftingOutput2x2.isEmpty()) {
-            System.out.println("[Crafting] Output is empty, cannot craft");
             return;
         }
 
         ItemStack heldStack = invInteraction.getHeldStack();
 
-        System.out.println("[Crafting] Output clicked! Output: " + craftingOutput2x2 + ", Held: " + heldStack);
-
         // Can only take if hands empty or holding same item
         if (heldStack.isEmpty()) {
             // Pick up output
-            System.out.println("[Crafting] Picking up output: " + craftingOutput2x2);
-            invInteraction.setHeldStack(craftingOutput2x2);
-
-            // Consume ingredients
-            for (int i = 0; i < 4; i++) {
-                if (!craftingGrid2x2[i].isEmpty()) {
-                    System.out.println("[Crafting] Consuming slot " + i + ": " + craftingGrid2x2[i]);
-                    craftingGrid2x2[i] = craftingGrid2x2[i].shrink(1);
-                }
-            }
-
-            System.out.println("[Inventory Crafting] Crafted: " + craftingOutput2x2);
+            invInteraction.setHeldStack(craftingOutput2x2.copy());
+            consumeIngredients();
             updateCrafting2x2();
+            System.out.println("[Crafting] Crafted: " + craftingOutput2x2);
         } else if (heldStack.getBlockId().equals(craftingOutput2x2.getBlockId())) {
             // Stack with held item
             int newCount = heldStack.getCount() + craftingOutput2x2.getCount();
             if (newCount <= heldStack.getMaxStackSize()) {
-                System.out.println("[Crafting] Stacking with held item. Old: " + heldStack.getCount() + ", New: " + newCount);
                 invInteraction.setHeldStack(heldStack.withCount(newCount));
-
-                // Consume ingredients
-                for (int i = 0; i < 4; i++) {
-                    if (!craftingGrid2x2[i].isEmpty()) {
-                        System.out.println("[Crafting] Consuming slot " + i + ": " + craftingGrid2x2[i]);
-                        craftingGrid2x2[i] = craftingGrid2x2[i].shrink(1);
-                    }
-                }
-
-                System.out.println("[Inventory Crafting] Crafted: " + craftingOutput2x2);
+                consumeIngredients();
                 updateCrafting2x2();
-            } else {
-                System.out.println("[Crafting] Cannot stack - would exceed max stack size");
+                System.out.println("[Crafting] Crafted: " + craftingOutput2x2);
             }
-        } else {
-            System.out.println("[Crafting] Cannot take output - holding different item type");
         }
     }
 
     /**
-     * Update crafting output
+     * FIXED: Consume one of each ingredient from the crafting grid
+     */
+    private void consumeIngredients() {
+        for (int i = 0; i < 4; i++) {
+            if (!craftingGrid2x2[i].isEmpty()) {
+                craftingGrid2x2[i] = craftingGrid2x2[i].shrink(1);
+            }
+        }
+    }
+
+    /**
+     * FIXED: Update crafting output based on grid
      */
     private void updateCrafting2x2() {
-        // Count ingredients
+        // Count ingredients in grid
         Map<String, Integer> ingredients = new HashMap<>();
         for (ItemStack stack : craftingGrid2x2) {
             if (!stack.isEmpty()) {
@@ -347,19 +297,18 @@ public class InventoryWithCraftingGUI {
             }
         }
 
-        // Find recipe
+        // Find matching recipe
         CraftingSystem.Recipe recipe = CraftingSystem.findRecipe(ingredients);
 
         if (recipe != null) {
             craftingOutput2x2 = new ItemStack(recipe.getOutput(), recipe.getOutputCount());
+            System.out.println("[Crafting] Recipe found: " + recipe.getOutput() +
+                    " x" + recipe.getOutputCount());
         } else {
             craftingOutput2x2 = ItemStack.EMPTY;
         }
     }
 
-    /**
-     * Return items from crafting grid to inventory
-     */
     public void returnItemsToInventory(Inventory inventory) {
         for (int i = 0; i < 4; i++) {
             if (!craftingGrid2x2[i].isEmpty()) {
@@ -370,9 +319,6 @@ public class InventoryWithCraftingGUI {
         craftingOutput2x2 = ItemStack.EMPTY;
     }
 
-    /**
-     * Clear crafting grid
-     */
     public void clearGrid() {
         for (int i = 0; i < 4; i++) {
             craftingGrid2x2[i] = ItemStack.EMPTY;

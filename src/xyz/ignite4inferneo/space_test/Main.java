@@ -5,6 +5,8 @@ import xyz.ignite4inferneo.space_test.client.Window;
 import xyz.ignite4inferneo.space_test.client.input.KeyBindings;
 import xyz.ignite4inferneo.space_test.client.input.KeyInput;
 import xyz.ignite4inferneo.space_test.common.VanillaBlocks;
+import xyz.ignite4inferneo.space_test.common.VanillaItems;
+import xyz.ignite4inferneo.space_test.common.util.EntitySpawnHelper;
 import xyz.ignite4inferneo.space_test.common.world.ImprovedWorldGenerator;
 import xyz.ignite4inferneo.space_test.common.world.World;
 
@@ -17,8 +19,12 @@ public class Main {
         System.out.println("Initializing game systems...");
 
         System.out.println("[Init] Setting up registries...");
+
         System.out.println("[Init] Registering vanilla blocks...");
         VanillaBlocks.register();
+
+        System.out.println("[Init] Registering vanilla items...");
+        VanillaItems.register();
 
         System.out.println("[Init] Registering vanilla recipes...");
         xyz.ignite4inferneo.space_test.common.VanillaRecipes.register();
@@ -37,7 +43,18 @@ public class Main {
         KeyBindings.init();
 
         System.out.println("[Init] Starting renderer...");
-        new Window(world);
+        Window window = new Window(world);
+
+        // Spawn test entities after a short delay
+        new Thread(() -> {
+            try {
+                Thread.sleep(2000); // Wait 2 seconds for chunks to load
+                int[] spawn = {0, 70, 0};
+                EntitySpawnHelper.spawnTestEntities(world, spawn[0], spawn[1], spawn[2]);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }).start();
 
         System.out.println("=== Initialization Complete ===");
         System.out.println("Controls:");
@@ -46,17 +63,20 @@ public class Main {
         System.out.println("  Space - Jump");
         System.out.println("  Left Ctrl - Sprint");
         System.out.println("  Shift - Sneak");
-        System.out.println("  Left Click - Break Block");
-        System.out.println("  Right Click - Place Block");
+        System.out.println("  Left Click - Break Block / Attack Entity");
+        System.out.println("  Right Click - Place Block / Interact with Entity");
         System.out.println("  E - Toggle Inventory");
         System.out.println("  ESC - Toggle Mouse Lock");
         System.out.println("  F3 - Toggle Debug Info");
         System.out.println("  1-9 - Select Hotbar Slot");
         System.out.println("");
-        System.out.println("New Features:");
+        System.out.println("Features:");
+        System.out.println("  - Complete item system with tools, weapons, and food");
         System.out.println("  - Sprint to move faster (drains stamina)");
-        System.out.println("  - Sneak to move slowly and quietly");
-        System.out.println("  - Watch your stamina bar!");
+        System.out.println("  - Sneak to move slowly");
+        System.out.println("  - Entity interaction (attack mobs, pickup items)");
+        System.out.println("  - 3D item icons in inventory");
+        System.out.println("  - Crafting system with recipes");
     }
 
     private static void loadMods() {

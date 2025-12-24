@@ -1,7 +1,7 @@
 package xyz.ignite4inferneo.space_test.common.inventory;
 
 /**
- * Represents a stack of items (blocks) in inventory
+ * FIXED: Represents a stack of items with copy() method
  */
 public class ItemStack {
     public static final ItemStack EMPTY = new ItemStack("", 0);
@@ -46,6 +46,13 @@ public class ItemStack {
 
     public ItemStack grow(int amount) {
         return withCount(Math.min(maxStackSize, count + amount));
+    }
+
+    /**
+     * NEW: Create a copy of this ItemStack
+     */
+    public ItemStack copy() {
+        return new ItemStack(blockId, count, maxStackSize);
     }
 
     @Override

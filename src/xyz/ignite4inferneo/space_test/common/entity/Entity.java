@@ -28,7 +28,7 @@ public abstract class Entity {
 
     // Bounding box
     protected double width = 0.6;
-    protected double height = 1.8;
+    public double height = 1.8;
 
     // State
     protected boolean onGround = false;
