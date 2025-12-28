@@ -1,23 +1,25 @@
 package xyz.ignite4inferneo.space_test.client.renderer;
 
+import xyz.ignite4inferneo.space_test.common.entity.*;
+import xyz.ignite4inferneo.space_test.common.inventory.ItemStack;
 import xyz.ignite4inferneo.space_test.common.world.Chunk;
 import xyz.ignite4inferneo.space_test.common.world.World;
 
-import java.awt.*;
 import java.util.*;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * FIXED: Ultra-optimized renderer without clipping issues
+ * COMPLETE: Ultra-optimized renderer WITH tiled rendering AND entity rendering
  *
- * Fixes:
- * - Proper near plane handling
- * - Fixed depth buffer precision
- * - Removed aggressive subdivision (was causing artifacts)
- * - Better quad clipping
- * - Fixed texture coordinate interpolation
+ * Features:
+ * - Parallel tile rendering for better CPU cache usage
+ * - Threaded chunk meshing
+ * - Integrated entity rendering with depth testing
+ * - Frustum culling
+ * - Greedy meshing
+ * - Proper depth sorting
+ * - Fixed texture interpolation
  */
 public class UltraOptimizedRenderer {
     private static final int RENDER_DISTANCE = 8;
@@ -29,7 +31,7 @@ public class UltraOptimizedRenderer {
 
     // Direct pixel buffer
     private int[] pixels;
-    private double[] zBuffer; // Back to double for better precision
+    private double[] zBuffer;
     protected int width;
     protected int height;
 
@@ -55,6 +57,20 @@ public class UltraOptimizedRenderer {
     // Face rendering
     private final FastFaceList renderFaces = new FastFaceList(8192);
     private final List<ChunkRenderTask> chunkTasks = new ArrayList<>(256);
+    private final List<EntitySprite> entitySprites = new ArrayList<>(256);
+
+    // Tiled rendering
+    private TiledRenderer tiledRenderer;
+    private static final int TILE_SIZE = 128; // 128x128 pixel tiles
+
+    // Entity colors
+    private static final Map<String, Integer> ENTITY_COLORS = new HashMap<>();
+    static {
+        ENTITY_COLORS.put("player", 0x6496FF);
+        ENTITY_COLORS.put("zombie", 0x649664);
+        ENTITY_COLORS.put("pig", 0xFFB4B4);
+        ENTITY_COLORS.put("item", 0xFFFF64);
+    }
 
     // Stats
     private int chunksRendered = 0;
@@ -63,6 +79,10 @@ public class UltraOptimizedRenderer {
     private int quadsCulled = 0;
     private long lastCleanupTime = 0;
     private static final long CLEANUP_INTERVAL = 30000;
+
+    public TextureAtlas getTextureAtlas() {
+        return textureAtlas;
+    }
 
     private static class ChunkMesh {
         List<GreedyMesher.Quad> quads;
@@ -199,6 +219,39 @@ public class UltraOptimizedRenderer {
         }
     }
 
+    /**
+     * Entity sprite for billboarded rendering
+     */
+    private static class EntitySprite {
+        int screenX, screenY;
+        int width, height;
+        double depth;
+        int color;
+        Entity entity;
+
+        // Health bar
+        float healthPercent;
+        boolean showHealth;
+
+        EntitySprite(int x, int y, int w, int h, double d, int c, Entity e) {
+            this.screenX = x;
+            this.screenY = y;
+            this.width = w;
+            this.height = h;
+            this.depth = d;
+            this.color = c;
+            this.entity = e;
+            this.showHealth = false;
+            this.healthPercent = 1.0f;
+
+            if (e instanceof LivingEntity living) {
+                this.healthPercent = living.getHealth() / living.getMaxHealth();
+                this.showHealth = (e instanceof PlayerEntity) ||
+                        (healthPercent < 1.0f && !(e instanceof ItemEntity));
+            }
+        }
+    }
+
     private static class ChunkRenderTask implements Comparable<ChunkRenderTask> {
         int chunkX, chunkZ;
         long key;
@@ -226,10 +279,15 @@ public class UltraOptimizedRenderer {
         this.textureAtlas = new TextureAtlas();
         this.mesher = new ThreadedChunkMesher(threadCount);
 
-        System.out.println("[UltraOptimizedRenderer] Initialized with " + threadCount + " threads");
+        // Initialize tiled renderer
+        int tileThreads = Math.max(2, threadCount / 2); // Use half threads for tiling
+        this.tiledRenderer = new TiledRenderer(TILE_SIZE, tileThreads);
+
+        System.out.println("[UltraOptimizedRenderer] Initialized with " + threadCount +
+                " mesh threads and " + tileThreads + " tile threads");
     }
 
-    public void setCanvasSize(Dimension dimension) {
+    public void setCanvasSize(java.awt.Dimension dimension) {
         setCanvasSize(dimension.width, dimension.height);
     }
 
@@ -246,6 +304,11 @@ public class UltraOptimizedRenderer {
 
         pixels = new int[w * h];
         zBuffer = new double[w * h];
+
+        // Update tile layout
+        if (tiledRenderer != null) {
+            tiledRenderer.updateTiles(w, h);
+        }
     }
 
     public int[] getPixels() {
@@ -278,11 +341,12 @@ public class UltraOptimizedRenderer {
     public void render() {
         if (pixels == null) return;
 
-        // Clear buffers
+        // Clear buffers (can be done in parallel with tiles)
         Arrays.fill(pixels, 0x87CEEB);
         Arrays.fill(zBuffer, Double.POSITIVE_INFINITY);
 
         renderFaces.clear();
+        entitySprites.clear();
         quadsRendered = 0;
         quadsCulled = 0;
 
@@ -302,6 +366,7 @@ public class UltraOptimizedRenderer {
         chunksRendered = 0;
         chunksMeshing = meshingInProgress.size();
 
+        // Render chunks (collect faces)
         for (int i = 0; i < chunkTasks.size(); i++) {
             ChunkRenderTask task = chunkTasks.get(i);
             if (renderChunk(task.chunkX, task.chunkZ, task.key)) {
@@ -309,13 +374,37 @@ public class UltraOptimizedRenderer {
             }
         }
 
+        // Collect entity sprites
+        collectEntitySprites();
+
         // Sort faces back to front
         sortFaces();
 
-        // Render all faces
-        for (int i = 0; i < renderFaces.size(); i++) {
-            fillTexturedQuad(renderFaces.get(i));
+        // Render all faces with tiled rendering
+        if (tiledRenderer != null && renderFaces.size() > 0) {
+            try {
+                // Render tiles in parallel
+                tiledRenderer.renderTiles(tile -> {
+                    for (int i = 0; i < renderFaces.size(); i++) {
+                        fillTexturedQuadInTile(renderFaces.get(i), tile);
+                    }
+                });
+            } catch (Exception e) {
+                System.err.println("[Renderer] Tiled rendering error: " + e.getMessage());
+                // Fallback to non-tiled rendering
+                for (int i = 0; i < renderFaces.size(); i++) {
+                    fillTexturedQuad(renderFaces.get(i));
+                }
+            }
+        } else {
+            // Fallback: render all faces normally
+            for (int i = 0; i < renderFaces.size(); i++) {
+                fillTexturedQuad(renderFaces.get(i));
+            }
         }
+
+        // Render entity sprites (after terrain, uses z-buffer)
+        renderEntitySprites();
 
         long now = System.currentTimeMillis();
         if (now - lastCleanupTime > CLEANUP_INTERVAL) {
@@ -430,9 +519,6 @@ public class UltraOptimizedRenderer {
         return true;
     }
 
-    /**
-     * FIXED: Render quad without subdivision artifacts
-     */
     private void renderQuad(GreedyMesher.Quad quad, int baseX, int baseZ) {
         double wx = baseX + quad.x;
         double wy = quad.y;
@@ -476,11 +562,10 @@ public class UltraOptimizedRenderer {
 
             if (camZ[i] < NEAR_PLANE) {
                 behindCount++;
-                camZ[i] = NEAR_PLANE; // Clamp to near plane
+                camZ[i] = NEAR_PLANE;
             }
         }
 
-        // Skip if entirely behind camera
         if (behindCount == 4) {
             quadsCulled++;
             return;
@@ -524,6 +609,342 @@ public class UltraOptimizedRenderer {
         quadsRendered++;
     }
 
+    /**
+     * Collect all visible entity sprites
+     */
+    private void collectEntitySprites() {
+        entitySprites.clear();
+
+        Collection<Entity> entities = world.getEntityManager().getEntities();
+
+        for (Entity entity : entities) {
+            if (entity.isRemoved()) continue;
+
+            // Distance culling
+            double dx = entity.x - x;
+            double dy = entity.y + entity.height / 2 - y;
+            double dz = entity.z - z;
+            double distSq = dx*dx + dy*dy + dz*dz;
+
+            if (distSq > 100 * 100) continue; // 100 block render distance
+
+            // Camera space depth
+            double camDepth = dx * fx + dy * fy + dz * fz;
+            if (camDepth < NEAR_PLANE) continue; // Behind camera
+
+            // Project to screen
+            double scale = invTanHalfFov / camDepth;
+            int screenX = (int)(halfWidth + (dx * rx + dz * rz) * scale * halfHeight);
+            int screenY = (int)(halfHeight - (dx * ux + dy * uy + dz * uz) * scale * halfHeight);
+
+            // Calculate size
+            int entitySize = (int)(entity.height * scale * halfHeight);
+            entitySize = Math.max(8, Math.min(entitySize, 200));
+
+            // Frustum culling (simple)
+            if (screenX + entitySize < 0 || screenX - entitySize >= width) continue;
+            if (screenY + entitySize < 0 || screenY - entitySize >= height) continue;
+
+            // Get entity color
+            int color = ENTITY_COLORS.getOrDefault(entity.getType(), 0xC8C8C8);
+
+            // Apply distance fog
+            color = applyDistanceFog(color, camDepth);
+
+            entitySprites.add(new EntitySprite(screenX, screenY, entitySize, entitySize,
+                    camDepth, color, entity));
+        }
+
+        // Sort sprites back to front
+        entitySprites.sort((a, b) -> Double.compare(b.depth, a.depth));
+    }
+
+    /**
+     * Render all entity sprites with depth testing
+     */
+    private void renderEntitySprites() {
+        for (EntitySprite sprite : entitySprites) {
+            Entity entity = sprite.entity;
+
+            if (entity instanceof ItemEntity) {
+                renderItemEntitySprite(sprite, (ItemEntity)entity);
+            } else if (entity instanceof PlayerEntity) {
+                renderPlayerSprite(sprite, (PlayerEntity)entity);
+            } else if (entity instanceof MobEntity) {
+                renderMobSprite(sprite, (MobEntity)entity);
+            } else {
+                renderGenericEntitySprite(sprite);
+            }
+        }
+    }
+
+    /**
+     * Render a player sprite
+     */
+    private void renderPlayerSprite(EntitySprite sprite, PlayerEntity player) {
+        int bodyWidth = sprite.width / 3;
+        int bodyHeight = sprite.height;
+        int headSize = bodyWidth;
+
+        // Body
+        fillRectWithDepth(
+                sprite.screenX - bodyWidth/2,
+                sprite.screenY - bodyHeight/2,
+                bodyWidth, bodyHeight,
+                sprite.color, sprite.depth
+        );
+
+        // Head
+        int headColor = brighten(sprite.color, 1.2f);
+        fillRectWithDepth(
+                sprite.screenX - headSize/2,
+                sprite.screenY - bodyHeight/2 - headSize,
+                headSize, headSize,
+                headColor, sprite.depth - 0.01
+        );
+
+        // Sprint indicator
+        if (player.isSprinting()) {
+            int indicatorY = sprite.screenY - bodyHeight/2 - headSize - 5;
+            fillRectWithDepth(sprite.screenX - 3, indicatorY, 6, 3, 0xFFFF00, sprite.depth - 0.02);
+        }
+
+        // Health bar
+        if (sprite.showHealth) {
+            renderHealthBar(sprite.screenX, sprite.screenY - bodyHeight/2 - headSize - 10,
+                    bodyWidth * 2, sprite.healthPercent, sprite.depth - 0.02);
+        }
+    }
+
+    /**
+     * Render a mob sprite
+     */
+    private void renderMobSprite(EntitySprite sprite, MobEntity mob) {
+        int bodyWidth = sprite.width / 3;
+        int bodyHeight = (int)(sprite.height * 0.8);
+        int headSize = bodyWidth;
+
+        // Body
+        fillRectWithDepth(
+                sprite.screenX - bodyWidth/2,
+                sprite.screenY - bodyHeight/2,
+                bodyWidth, bodyHeight,
+                sprite.color, sprite.depth
+        );
+
+        // Head
+        int headColor = brighten(sprite.color, 1.2f);
+        fillRectWithDepth(
+                sprite.screenX - headSize/2,
+                sprite.screenY - bodyHeight/2 - headSize/2,
+                headSize, headSize,
+                headColor, sprite.depth - 0.01
+        );
+
+        // Health bar (only if damaged)
+        if (sprite.showHealth) {
+            renderHealthBar(sprite.screenX, sprite.screenY - bodyHeight/2 - headSize/2 - 5,
+                    bodyWidth * 2, sprite.healthPercent, sprite.depth - 0.02);
+        }
+
+        // AI state indicator
+        if (mob.getAIState() == MobEntity.AIState.CHASE ||
+                mob.getAIState() == MobEntity.AIState.ATTACK) {
+            fillCircleWithDepth(sprite.screenX, sprite.screenY - bodyHeight/2 - headSize - 3,
+                    3, 0xFF0000, sprite.depth - 0.02);
+        }
+    }
+
+    /**
+     * Render an item entity sprite
+     */
+    private void renderItemEntitySprite(EntitySprite sprite, ItemEntity itemEntity) {
+        ItemStack stack = itemEntity.getItemStack();
+        if (stack.isEmpty()) return;
+
+        // Apply bobbing
+        double bobHeight = itemEntity.getBobHeight();
+        int bobbedY = sprite.screenY - (int)(bobHeight * 10);
+
+        int cubeSize = Math.max(8, sprite.width / 4);
+
+        // Shadow
+        fillCircleWithDepth(sprite.screenX, sprite.screenY + cubeSize/2,
+                cubeSize/2, 0x00000080, sprite.depth + 0.01);
+
+        // Item cube
+        fillRectWithDepth(
+                sprite.screenX - cubeSize/2,
+                bobbedY - cubeSize/2,
+                cubeSize, cubeSize,
+                sprite.color, sprite.depth
+        );
+
+        // Highlight
+        int highlightColor = brighten(sprite.color, 1.5f);
+        fillRectWithDepth(
+                sprite.screenX - cubeSize/2 + 1,
+                bobbedY - cubeSize/2 + 1,
+                cubeSize/3, cubeSize/3,
+                highlightColor, sprite.depth - 0.01
+        );
+    }
+
+    /**
+     * Render generic entity sprite
+     */
+    private void renderGenericEntitySprite(EntitySprite sprite) {
+        int width = sprite.width / 3;
+        int height = sprite.height;
+
+        fillRectWithDepth(
+                sprite.screenX - width/2,
+                sprite.screenY - height/2,
+                width, height,
+                sprite.color, sprite.depth
+        );
+    }
+
+    /**
+     * Render health bar with depth testing
+     */
+    private void renderHealthBar(int x, int y, int width, float healthPercent, double depth) {
+        int barHeight = 3;
+
+        // Background
+        fillRectWithDepth(x - width/2, y, width, barHeight, 0x00000096, depth);
+
+        // Health
+        int healthColor = healthPercent > 0.6f ? 0x00FF00 :
+                healthPercent > 0.3f ? 0xFFFF00 : 0xFF0000;
+        fillRectWithDepth(x - width/2, y, (int)(width * healthPercent), barHeight,
+                healthColor, depth - 0.001);
+    }
+
+    /**
+     * Fill rectangle with depth testing
+     */
+    private void fillRectWithDepth(int x, int y, int w, int h, int color, double depth) {
+        int minX = Math.max(0, x);
+        int maxX = Math.min(width - 1, x + w);
+        int minY = Math.max(0, y);
+        int maxY = Math.min(height - 1, y + h);
+
+        int r = (color >> 16) & 0xFF;
+        int g = (color >> 8) & 0xFF;
+        int b = color & 0xFF;
+        int a = (color >> 24) & 0xFF;
+
+        if (a == 0) a = 255; // Default opaque
+
+        for (int sy = minY; sy < maxY; sy++) {
+            int rowStart = sy * width;
+            for (int sx = minX; sx < maxX; sx++) {
+                int idx = rowStart + sx;
+                if (idx >= 0 && idx < pixels.length && depth < zBuffer[idx]) {
+                    zBuffer[idx] = depth;
+
+                    if (a == 255) {
+                        pixels[idx] = (r << 16) | (g << 8) | b;
+                    } else {
+                        // Alpha blending
+                        int oldColor = pixels[idx];
+                        int oldR = (oldColor >> 16) & 0xFF;
+                        int oldG = (oldColor >> 8) & 0xFF;
+                        int oldB = oldColor & 0xFF;
+
+                        int newR = (r * a + oldR * (255 - a)) / 255;
+                        int newG = (g * a + oldG * (255 - a)) / 255;
+                        int newB = (b * a + oldB * (255 - a)) / 255;
+
+                        pixels[idx] = (newR << 16) | (newG << 8) | newB;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Fill circle with depth testing
+     */
+    private void fillCircleWithDepth(int cx, int cy, int radius, int color, double depth) {
+        int minX = Math.max(0, cx - radius);
+        int maxX = Math.min(width - 1, cx + radius);
+        int minY = Math.max(0, cy - radius);
+        int maxY = Math.min(height - 1, cy + radius);
+
+        int r = (color >> 16) & 0xFF;
+        int g = (color >> 8) & 0xFF;
+        int b = color & 0xFF;
+        int a = (color >> 24) & 0xFF;
+
+        if (a == 0) a = 255;
+
+        int radiusSq = radius * radius;
+
+        for (int sy = minY; sy <= maxY; sy++) {
+            int dy = sy - cy;
+            int rowStart = sy * width;
+            for (int sx = minX; sx <= maxX; sx++) {
+                int dx = sx - cx;
+                if (dx*dx + dy*dy <= radiusSq) {
+                    int idx = rowStart + sx;
+                    if (idx >= 0 && idx < pixels.length && depth < zBuffer[idx]) {
+                        zBuffer[idx] = depth;
+
+                        if (a == 255) {
+                            pixels[idx] = (r << 16) | (g << 8) | b;
+                        } else {
+                            int oldColor = pixels[idx];
+                            int oldR = (oldColor >> 16) & 0xFF;
+                            int oldG = (oldColor >> 8) & 0xFF;
+                            int oldB = oldColor & 0xFF;
+
+                            int newR = (r * a + oldR * (255 - a)) / 255;
+                            int newG = (g * a + oldG * (255 - a)) / 255;
+                            int newB = (b * a + oldB * (255 - a)) / 255;
+
+                            pixels[idx] = (newR << 16) | (newG << 8) | newB;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Brighten a color
+     */
+    private int brighten(int color, float factor) {
+        int r = Math.min(255, (int)(((color >> 16) & 0xFF) * factor));
+        int g = Math.min(255, (int)(((color >> 8) & 0xFF) * factor));
+        int b = Math.min(255, (int)((color & 0xFF) * factor));
+        return (r << 16) | (g << 8) | b;
+    }
+
+    /**
+     * Apply distance fog to color
+     */
+    private int applyDistanceFog(int color, double depth) {
+        float fogStart = 40.0f;
+        float fogEnd = 80.0f;
+
+        if (depth < fogStart) return color;
+
+        float fogFactor = (float)((depth - fogStart) / (fogEnd - fogStart));
+        fogFactor = Math.max(0, Math.min(1, fogFactor));
+
+        int r = (color >> 16) & 0xFF;
+        int g = (color >> 8) & 0xFF;
+        int b = color & 0xFF;
+
+        int newR = (int)(r * (1 - fogFactor) + 135 * fogFactor);
+        int newG = (int)(g * (1 - fogFactor) + 206 * fogFactor);
+        int newB = (int)(b * (1 - fogFactor) + 235 * fogFactor);
+
+        return (newR << 16) | (newG << 8) | newB;
+    }
+
     private void sortFaces() {
         int n = renderFaces.size();
         for (int i = 1; i < n; i++) {
@@ -544,14 +965,18 @@ public class UltraOptimizedRenderer {
     }
 
     /**
-     * FIXED: Proper texture interpolation
+     * Standard texture interpolation with bounds checking (fallback)
      */
     private void fillTexturedQuad(FastFaceList.Face face) {
         int minY = Math.min(Math.min(face.y[0], face.y[1]), Math.min(face.y[2], face.y[3]));
         int maxY = Math.max(Math.max(face.y[0], face.y[1]), Math.max(face.y[2], face.y[3]));
 
+        // Safety clip to screen bounds with margin
         minY = Math.max(0, minY);
         maxY = Math.min(height - 1, maxY);
+
+        // Skip if completely off-screen
+        if (minY > height - 1 || maxY < 0) return;
 
         double invD0 = 1.0 / face.d[0], invD1 = 1.0 / face.d[1];
         double invD2 = 1.0 / face.d[2], invD3 = 1.0 / face.d[3];
@@ -601,8 +1026,12 @@ public class UltraOptimizedRenderer {
                 }
             }
 
+            // Clip X to screen bounds
             int minX = Math.max(0, (int)ex0);
             int maxX = Math.min(width - 1, (int)ex1);
+
+            // Skip if span is off-screen
+            if (minX > width - 1 || maxX < 0) continue;
 
             double spanWidth = ex1 - ex0;
             if (spanWidth < 0.001) continue;
@@ -611,11 +1040,115 @@ public class UltraOptimizedRenderer {
             int rowStart = sy * width;
 
             for (int sx = minX; sx <= maxX; sx++) {
+                // Additional safety check
+                int idx = rowStart + sx;
+                if (idx < 0 || idx >= pixels.length) continue;
+
                 double t = (sx - ex0) * invSpanWidth;
                 double invD = eInvD0 + t * (eInvD1 - eInvD0);
                 double depth = 1.0 / invD;
 
+                if (depth < zBuffer[idx]) {
+                    zBuffer[idx] = depth;
+
+                    double u = (eUD0 + t * (eUD1 - eUD0)) * depth;
+                    double v = (eVD0 + t * (eVD1 - eVD0)) * depth;
+
+                    int color = textureAtlas.sample(face.texIndex, u, v);
+
+                    int r = (((color >> 16) & 0xFF) * brightnessInt) >> 8;
+                    int g = (((color >> 8) & 0xFF) * brightnessInt) >> 8;
+                    int b = ((color & 0xFF) * brightnessInt) >> 8;
+
+                    pixels[idx] = (r << 16) | (g << 8) | b;
+                }
+            }
+        }
+    }
+
+    /**
+     * Tiled texture interpolation with bounds checking (parallel rendering)
+     */
+    private void fillTexturedQuadInTile(FastFaceList.Face face, TiledRenderer.RenderTile tile) {
+        int minY = Math.min(Math.min(face.y[0], face.y[1]), Math.min(face.y[2], face.y[3]));
+        int maxY = Math.max(Math.max(face.y[0], face.y[1]), Math.max(face.y[2], face.y[3]));
+
+        // Clip to tile bounds with safety margin
+        minY = Math.max(tile.startY, Math.max(0, minY));
+        maxY = Math.min(tile.endY - 1, Math.min(height - 1, maxY));
+
+        if (minY > maxY || minY >= height || maxY < 0) return; // Quad doesn't intersect this tile
+
+        double invD0 = 1.0 / face.d[0], invD1 = 1.0 / face.d[1];
+        double invD2 = 1.0 / face.d[2], invD3 = 1.0 / face.d[3];
+
+        double uD0 = face.uv[0] * invD0, uD1 = face.uv[2] * invD1;
+        double uD2 = face.uv[4] * invD2, uD3 = face.uv[6] * invD3;
+        double vD0 = face.uv[1] * invD0, vD1 = face.uv[3] * invD1;
+        double vD2 = face.uv[5] * invD2, vD3 = face.uv[7] * invD3;
+
+        int brightnessInt = (int)(face.brightness * 256);
+
+        for (int sy = minY; sy <= maxY; sy++) {
+            double ex0 = Double.POSITIVE_INFINITY, ex1 = Double.NEGATIVE_INFINITY;
+            double eInvD0 = 0, eInvD1 = 0, eUD0 = 0, eUD1 = 0, eVD0 = 0, eVD1 = 0;
+
+            for (int i = 0; i < 4; i++) {
+                int j = (i + 1) & 3;
+                if ((face.y[i] <= sy && face.y[j] > sy) || (face.y[j] <= sy && face.y[i] > sy)) {
+                    double t = (sy - face.y[i]) / (double)(face.y[j] - face.y[i]);
+                    double ex = face.x[i] + t * (face.x[j] - face.x[i]);
+
+                    double eInvD, eUD, eVD;
+                    if (i == 0) {
+                        eInvD = invD0 + t * (invD1 - invD0);
+                        eUD = uD0 + t * (uD1 - uD0);
+                        eVD = vD0 + t * (vD1 - vD0);
+                    } else if (i == 1) {
+                        eInvD = invD1 + t * (invD2 - invD1);
+                        eUD = uD1 + t * (uD2 - uD1);
+                        eVD = vD1 + t * (vD2 - vD1);
+                    } else if (i == 2) {
+                        eInvD = invD2 + t * (invD3 - invD2);
+                        eUD = uD2 + t * (uD3 - uD2);
+                        eVD = vD2 + t * (vD3 - vD2);
+                    } else {
+                        eInvD = invD3 + t * (invD0 - invD3);
+                        eUD = uD3 + t * (uD0 - uD3);
+                        eVD = vD3 + t * (vD0 - vD3);
+                    }
+
+                    if (ex < ex0) {
+                        ex0 = ex; eInvD0 = eInvD; eUD0 = eUD; eVD0 = eVD;
+                    }
+                    if (ex > ex1) {
+                        ex1 = ex; eInvD1 = eInvD; eUD1 = eUD; eVD1 = eVD;
+                    }
+                }
+            }
+
+            // Clip to tile X bounds with safety
+            int minX = Math.max(tile.startX, Math.max(0, (int)ex0));
+            int maxX = Math.min(tile.endX - 1, Math.min(width - 1, (int)ex1));
+
+            // Skip if span is off-screen
+            if (minX > maxX || minX >= width || maxX < 0) continue;
+
+            double spanWidth = ex1 - ex0;
+            if (spanWidth < 0.001) continue;
+
+            double invSpanWidth = 1.0 / spanWidth;
+            int rowStart = sy * width;
+
+            for (int sx = minX; sx <= maxX; sx++) {
+                // Additional safety check for array bounds
                 int idx = rowStart + sx;
+                if (idx < 0 || idx >= pixels.length) continue;
+
+                double t = (sx - ex0) * invSpanWidth;
+                double invD = eInvD0 + t * (eInvD1 - eInvD0);
+                double depth = 1.0 / invD;
+
                 if (depth < zBuffer[idx]) {
                     zBuffer[idx] = depth;
 
@@ -665,6 +1198,10 @@ public class UltraOptimizedRenderer {
     public int getQuadsCulled() { return quadsCulled; }
 
     public void shutdown() {
+        System.out.println("[UltraOptimizedRenderer] Shutting down...");
         mesher.shutdown();
+        if (tiledRenderer != null) {
+            tiledRenderer.shutdown();
+        }
     }
 }

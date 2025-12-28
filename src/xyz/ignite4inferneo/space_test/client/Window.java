@@ -6,6 +6,7 @@ import xyz.ignite4inferneo.space_test.client.input.KeyBindings;
 import xyz.ignite4inferneo.space_test.client.input.KeyInput;
 import xyz.ignite4inferneo.space_test.client.input.MouseInput;
 import xyz.ignite4inferneo.space_test.client.renderer.EntityRenderer;
+import xyz.ignite4inferneo.space_test.client.renderer.ItemIconRenderer;
 import xyz.ignite4inferneo.space_test.client.renderer.RendererAdapter;
 import xyz.ignite4inferneo.space_test.common.entity.Entity;
 import xyz.ignite4inferneo.space_test.common.entity.ItemEntity;
@@ -87,8 +88,12 @@ public class Window {
         renderer = new RendererAdapter(world, threads);
         renderer.setCanvasSize(displayWindow.getSize());
 
+        // IMPORTANT: Initialize ItemIconRenderer with the texture atlas
+        ItemIconRenderer.init(renderer.getTextureAtlas());
+
         System.out.println("[Window] Preloading chunks around player...");
         renderer.preloadChunksAround(spawnPos[0], spawnPos[2], 4);
+
 
         MouseInput.init(displayWindow);
         MouseInput.setMouseLocked(true);
@@ -420,19 +425,15 @@ public class Window {
 
         if (renderer != null) {
             renderer.syncCamera();
-            renderer.render();
+
+            long renderStart = System.currentTimeMillis();
+            renderer.render(); // Now renders terrain AND entities!
+            renderTimeMs = System.currentTimeMillis() - renderStart;
+
             graphics.drawImage(renderer.getScreenBuffer(), 0, 0, null);
 
-            long entityStart = System.currentTimeMillis();
-            double[] camPos = player.getCameraPosition();
-            EntityRenderer.renderEntities(
-                    graphics,
-                    world.getEntityManager().getEntities(),
-                    camPos[0], camPos[1], camPos[2],
-                    yaw, pitch,
-                    displayWindow.getWidth(), displayWindow.getHeight()
-            );
-            entityRenderTimeMs = System.currentTimeMillis() - entityStart;
+            // Remove the separate entity rendering - it's now integrated!
+            // entityRenderTimeMs is now part of renderTimeMs
         }
 
         // Draw UI
@@ -443,7 +444,7 @@ public class Window {
             int y = 41;
             graphics.drawString("FPS: " + String.format("%.1f", getAverageFPS()), 10, y);
             y += 20;
-            graphics.drawString("Render: " + renderTimeMs + "ms (Entities: " + entityRenderTimeMs + "ms)", 10, y);
+            graphics.drawString("Render: " + renderTimeMs + "ms", 10, y); // Includes entities now
             y += 20;
 
             double[] pos = player.getFeetPosition();
@@ -492,7 +493,7 @@ public class Window {
             graphics.setColor(Color.WHITE);
             y += 20;
 
-            // NEW: Show what we're looking at
+            // Show what we're looking at
             if (currentEntityTarget != null) {
                 Entity entity = currentEntityTarget.entity;
                 graphics.setColor(Color.YELLOW);
@@ -527,7 +528,6 @@ public class Window {
         int cy = displayWindow.getHeight() / 2;
 
         if (currentEntityTarget != null) {
-            // Red crosshair when targeting entity
             graphics.setColor(Color.RED);
         } else {
             graphics.setColor(Color.WHITE);

@@ -311,20 +311,23 @@ public class CraftingTableGUI {
      * Update crafting output based on grid
      */
     private void updateCrafting() {
-        // Count ingredients
-        Map<String, Integer> ingredients = new HashMap<>();
-        for (ItemStack stack : craftingGrid) {
-            if (!stack.isEmpty()) {
-                String id = stack.getBlockId();
-                ingredients.put(id, ingredients.getOrDefault(id, 0) + stack.getCount());
+        // Convert ItemStack array to String array for recipe matching
+        String[] grid = new String[9];
+        for (int i = 0; i < 9; i++) {
+            if (!craftingGrid[i].isEmpty()) {
+                grid[i] = craftingGrid[i].getBlockId();
+            } else {
+                grid[i] = null;
             }
         }
 
-        // Find recipe
-        CraftingSystem.Recipe recipe = CraftingSystem.findRecipe(ingredients);
+        // Find matching recipe (checks shaped first, then shapeless)
+        CraftingSystem.Recipe recipe = CraftingSystem.findRecipe(grid, 3);
 
         if (recipe != null) {
             craftingOutput = new ItemStack(recipe.getOutput(), recipe.getOutputCount());
+            System.out.println("[Crafting] Recipe found: " + recipe.getOutput() +
+                    " x" + recipe.getOutputCount() + " (" + recipe.getType() + ")");
         } else {
             craftingOutput = ItemStack.EMPTY;
         }

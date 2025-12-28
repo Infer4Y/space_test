@@ -100,4 +100,8 @@ public class RendererAdapter {
         renderer.yaw = this.yaw;
         renderer.pitch = this.pitch;
     }
+
+    public TextureAtlas getTextureAtlas() {
+        return renderer.getTextureAtlas();
+    }
 }

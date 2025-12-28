@@ -288,22 +288,23 @@ public class InventoryWithCraftingGUI {
      * FIXED: Update crafting output based on grid
      */
     private void updateCrafting2x2() {
-        // Count ingredients in grid
-        Map<String, Integer> ingredients = new HashMap<>();
-        for (ItemStack stack : craftingGrid2x2) {
-            if (!stack.isEmpty()) {
-                String id = stack.getBlockId();
-                ingredients.put(id, ingredients.getOrDefault(id, 0) + stack.getCount());
+        // Convert ItemStack array to String array for recipe matching
+        String[] grid = new String[4];
+        for (int i = 0; i < 4; i++) {
+            if (!craftingGrid2x2[i].isEmpty()) {
+                grid[i] = craftingGrid2x2[i].getBlockId();
+            } else {
+                grid[i] = null;
             }
         }
 
-        // Find matching recipe
-        CraftingSystem.Recipe recipe = CraftingSystem.findRecipe(ingredients);
+        // Find matching recipe (checks shaped first, then shapeless)
+        CraftingSystem.Recipe recipe = CraftingSystem.findRecipe(grid, 2);
 
         if (recipe != null) {
             craftingOutput2x2 = new ItemStack(recipe.getOutput(), recipe.getOutputCount());
             System.out.println("[Crafting] Recipe found: " + recipe.getOutput() +
-                    " x" + recipe.getOutputCount());
+                    " x" + recipe.getOutputCount() + " (" + recipe.getType() + ")");
         } else {
             craftingOutput2x2 = ItemStack.EMPTY;
         }
