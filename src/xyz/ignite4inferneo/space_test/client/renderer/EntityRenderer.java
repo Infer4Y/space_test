@@ -4,6 +4,7 @@ import xyz.ignite4inferneo.space_test.common.entity.*;
 import xyz.ignite4inferneo.space_test.common.inventory.ItemStack;
 
 import java.awt.*;
+import java.awt.image.BufferedImage;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -370,5 +371,9 @@ public class EntityRenderer {
         double dy = y1 - y2;
         double dz = z1 - z2;
         return dx*dx + dy*dy + dz*dz;
+    }
+
+    private static BufferedImage getMobTexture(String mobType) {
+        return MobTextureGenerator.getTexture(mobType);
     }
 }

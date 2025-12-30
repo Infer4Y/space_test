@@ -71,6 +71,111 @@ public class PlayerEntity extends LivingEntity {
         this.height = 1.8;
     }
 
+    @Override
+    protected boolean checkBlockCollision() {
+        double hw = width / 2;
+        double margin = 0.001;
+
+        // Check multiple points on the player's bounding box
+        int minX = (int) Math.floor(x - hw - margin);
+        int maxX = (int) Math.floor(x + hw + margin);
+        int minY = (int) Math.floor(y);
+        int maxY = (int) Math.floor(y + height + margin);
+        int minZ = (int) Math.floor(z - hw - margin);
+        int maxZ = (int) Math.floor(z + hw + margin);
+
+        // Check all corners and center points
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    if (world.isSolid(bx, by, bz)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * ENHANCED: Move with better collision resolution
+     */
+    @Override
+    protected void move(double dx, double dy, double dz) {
+        double origDx = dx;
+        double origDy = dy;
+        double origDz = dz;
+
+        // Handle entity collisions if enabled
+        if (hasEntityCollision) {
+            handleEntityCollisions(dx, dy, dz);
+        }
+
+        // Step size for collision checking (smaller = more accurate)
+        double stepSize = 0.05;
+
+        // X movement with sub-stepping
+        if (Math.abs(dx) > stepSize) {
+            double steps = Math.ceil(Math.abs(dx) / stepSize);
+            double stepDx = dx / steps;
+            for (int i = 0; i < steps; i++) {
+                x += stepDx;
+                if (checkBlockCollision()) {
+                    x -= stepDx;
+                    vx = 0;
+                    dx = 0;
+                    break;
+                }
+            }
+        } else {
+            x += dx;
+            if (checkBlockCollision()) {
+                x -= dx;
+                vx = 0;
+                dx = 0;
+            }
+        }
+
+        // Y movement
+        y += dy;
+        if (checkBlockCollision()) {
+            y -= dy;
+            if (dy > 0) {
+                vy = 0; // Hit ceiling
+            } else {
+                vy = 0; // Hit ground
+                onGround = true;
+            }
+            dy = 0;
+        }
+
+        // Z movement with sub-stepping
+        if (Math.abs(dz) > stepSize) {
+            double steps = Math.ceil(Math.abs(dz) / stepSize);
+            double stepDz = dz / steps;
+            for (int i = 0; i < steps; i++) {
+                z += stepDz;
+                if (checkBlockCollision()) {
+                    z -= stepDz;
+                    vz = 0;
+                    dz = 0;
+                    break;
+                }
+            }
+        } else {
+            z += dz;
+            if (checkBlockCollision()) {
+                z -= dz;
+                vz = 0;
+                dz = 0;
+            }
+        }
+
+        // Call movement callback
+        onMoved(origDx, origDy, origDz, dx, dy, dz);
+    }
+
     /**
      * Create local player instance
      */

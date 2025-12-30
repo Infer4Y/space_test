@@ -7,11 +7,12 @@ import xyz.ignite4inferneo.space_test.common.world.Chunk;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * FIXED: Greedy mesher with proper chunk border handling
+ */
 public class GreedyMesher {
 
     private static final int MAX_QUAD_SIZE = 4;
-
-    // IMPORTANT: Use the correct air block ID
     private static final String AIR = "space_test:air";
 
     public static class Quad {
@@ -23,13 +24,9 @@ public class GreedyMesher {
         public float brightness;
 
         public Quad(int x, int y, int z, int w, int h, int axis, int dir, int texIndex, float brightness) {
-            this.x = x;
-            this.y = y;
-            this.z = z;
-            this.w = w;
-            this.h = h;
-            this.axis = axis;
-            this.dir = dir;
+            this.x = x; this.y = y; this.z = z;
+            this.w = w; this.h = h;
+            this.axis = axis; this.dir = dir;
             this.texIndex = texIndex;
             this.brightness = brightness;
         }
@@ -69,9 +66,28 @@ public class GreedyMesher {
                     if (block.equals(AIR)) continue;
 
                     int checkY = y + dir;
-                    if (checkY < 0 || checkY >= Chunk.HEIGHT || blocks[x][checkY][z].equals(AIR)) {
+
+                    // FIXED: Proper neighbor check with bounds
+                    boolean shouldRender = false;
+                    if (checkY < 0 || checkY >= Chunk.HEIGHT) {
+                        // At chunk boundary - always render (will be culled by neighbor chunk)
+                        shouldRender = true;
+                    } else {
+                        String neighbor = blocks[x][checkY][z];
+                        // Render if neighbor is air OR transparent
+                        if (neighbor.equals(AIR)) {
+                            shouldRender = true;
+                        } else {
+                            Block neighborBlock = Registries.BLOCKS.get(neighbor);
+                            if (neighborBlock != null && neighborBlock.isTransparent()) {
+                                shouldRender = true;
+                            }
+                        }
+                    }
+
+                    if (shouldRender) {
                         Block blockObj = Registries.BLOCKS.get(block);
-                        if (blockObj != null) {
+                        if (blockObj != null && !blockObj.isTransparent()) {
                             mask[x][z] = true;
                             texMask[x][z] = blockObj.getTextureIndices()[faceIndex];
                         }
@@ -79,6 +95,7 @@ public class GreedyMesher {
                 }
             }
 
+            // Greedy meshing
             for (int x = 0; x < Chunk.SIZE; x++) {
                 for (int z = 0; z < Chunk.SIZE; ) {
                     if (!mask[x][z]) {
@@ -137,12 +154,28 @@ public class GreedyMesher {
             for (int x = 0; x < Chunk.SIZE; x++) {
                 for (int y = 0; y < Chunk.HEIGHT; y++) {
                     String block = blocks[x][y][z];
-                    if (block.equals(AIR)) continue;  // FIXED
+                    if (block.equals(AIR)) continue;
 
                     int checkZ = z + dir;
-                    if (checkZ < 0 || checkZ >= Chunk.SIZE || blocks[x][y][checkZ].equals(AIR)) {
+
+                    boolean shouldRender = false;
+                    if (checkZ < 0 || checkZ >= Chunk.SIZE) {
+                        shouldRender = true; // Chunk boundary
+                    } else {
+                        String neighbor = blocks[x][y][checkZ];
+                        if (neighbor.equals(AIR)) {
+                            shouldRender = true;
+                        } else {
+                            Block neighborBlock = Registries.BLOCKS.get(neighbor);
+                            if (neighborBlock != null && neighborBlock.isTransparent()) {
+                                shouldRender = true;
+                            }
+                        }
+                    }
+
+                    if (shouldRender) {
                         Block blockObj = Registries.BLOCKS.get(block);
-                        if (blockObj != null) {
+                        if (blockObj != null && !blockObj.isTransparent()) {
                             mask[x][y] = true;
                             texMask[x][y] = blockObj.getTextureIndices()[faceIndex];
                         }
@@ -208,12 +241,28 @@ public class GreedyMesher {
             for (int z = 0; z < Chunk.SIZE; z++) {
                 for (int y = 0; y < Chunk.HEIGHT; y++) {
                     String block = blocks[x][y][z];
-                    if (block.equals(AIR)) continue;  // FIXED
+                    if (block.equals(AIR)) continue;
 
                     int checkX = x + dir;
-                    if (checkX < 0 || checkX >= Chunk.SIZE || blocks[checkX][y][z].equals(AIR)) {
+
+                    boolean shouldRender = false;
+                    if (checkX < 0 || checkX >= Chunk.SIZE) {
+                        shouldRender = true; // Chunk boundary
+                    } else {
+                        String neighbor = blocks[checkX][y][z];
+                        if (neighbor.equals(AIR)) {
+                            shouldRender = true;
+                        } else {
+                            Block neighborBlock = Registries.BLOCKS.get(neighbor);
+                            if (neighborBlock != null && neighborBlock.isTransparent()) {
+                                shouldRender = true;
+                            }
+                        }
+                    }
+
+                    if (shouldRender) {
                         Block blockObj = Registries.BLOCKS.get(block);
-                        if (blockObj != null) {
+                        if (blockObj != null && !blockObj.isTransparent()) {
                             mask[z][y] = true;
                             texMask[z][y] = blockObj.getTextureIndices()[faceIndex];
                         }
