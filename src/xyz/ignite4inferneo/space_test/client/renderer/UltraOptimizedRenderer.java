@@ -1129,6 +1129,7 @@ public class UltraOptimizedRenderer {
     }
 
     private void fillTexturedQuadInTile(FastFaceList.Face face, TiledRenderer.RenderTile tile) {
+        // Calculate quad size on screen
         int minX = Math.min(Math.min(face.x[0], face.x[1]), Math.min(face.x[2], face.x[3]));
         int maxX = Math.max(Math.max(face.x[0], face.x[1]), Math.max(face.x[2], face.x[3]));
         int minY = Math.min(Math.min(face.y[0], face.y[1]), Math.min(face.y[2], face.y[3]));
@@ -1138,48 +1139,107 @@ public class UltraOptimizedRenderer {
         int quadHeight = maxY - minY;
         int maxDim = Math.max(quadWidth, quadHeight);
 
-        int subdivisions = 1;
-        if (maxDim > 150) {
-            subdivisions = 8;
-        } else if (maxDim > 80) {
-            subdivisions = 4;
-        } else if (maxDim > 40) {
-            subdivisions = 2;
+        // Check depth variance (perspective distortion)
+        double minDepth = Math.min(Math.min(face.d[0], face.d[1]), Math.min(face.d[2], face.d[3]));
+        double maxDepth = Math.max(Math.max(face.d[0], face.d[1]), Math.max(face.d[2], face.d[3]));
+        double depthRatio = maxDepth / Math.max(0.1, minDepth);
+
+        // Only subdivide if BOTH conditions are met:
+        // 1. Quad is very large on screen (>200 pixels)
+        // 2. Has significant depth variation (ratio > 1.5)
+        boolean needsSubdivision = maxDim > 200 && depthRatio > 1.5;
+
+        if (needsSubdivision) {
+            // Use ONLY 2x2 subdivision - faster and good enough
+            subdivideQuad2x2(face, tile);
+        } else {
+            // Direct render - fast path
+            renderQuadDirectInTile(face, tile);
+        }
+    }
+
+    /**
+     * Fast 2x2 subdivision (only 4 sub-quads instead of 16/64)
+     */
+    private void subdivideQuad2x2(FastFaceList.Face face, TiledRenderer.RenderTile tile) {
+        double uRange = face.uv[2] - face.uv[0];
+        double vRange = face.uv[7] - face.uv[1];
+
+        // Pre-allocate sub-faces
+        FastFaceList.Face[] subFaces = new FastFaceList.Face[4];
+        for (int i = 0; i < 4; i++) {
+            subFaces[i] = new FastFaceList.Face();
         }
 
-        if (subdivisions > 1) {
-            double step = 1.0 / subdivisions;
-            double uRange = face.uv[2] - face.uv[0];
-            double vRange = face.uv[7] - face.uv[1];
+        // Compute mid-points once
+        int midX01 = (face.x[0] + face.x[1]) / 2;
+        int midY01 = (face.y[0] + face.y[1]) / 2;
+        double midD01 = (face.d[0] + face.d[1]) * 0.5;
 
-            for (int row = 0; row < subdivisions; row++) {
-                for (int col = 0; col < subdivisions; col++) {
-                    double t0 = col * step, t1 = (col + 1) * step;
-                    double s0 = row * step, s1 = (row + 1) * step;
+        int midX12 = (face.x[1] + face.x[2]) / 2;
+        int midY12 = (face.y[1] + face.y[2]) / 2;
+        double midD12 = (face.d[1] + face.d[2]) * 0.5;
 
-                    FastFaceList.Face subFace = new FastFaceList.Face();
-                    interpolateCorner(face, t0, s0, subFace, 0);
-                    interpolateCorner(face, t1, s0, subFace, 1);
-                    interpolateCorner(face, t1, s1, subFace, 2);
-                    interpolateCorner(face, t0, s1, subFace, 3);
+        int midX23 = (face.x[2] + face.x[3]) / 2;
+        int midY23 = (face.y[2] + face.y[3]) / 2;
+        double midD23 = (face.d[2] + face.d[3]) * 0.5;
 
-                    subFace.uv[0] = face.uv[0] + t0 * uRange;
-                    subFace.uv[1] = face.uv[1] + s0 * vRange;
-                    subFace.uv[2] = face.uv[0] + t1 * uRange;
-                    subFace.uv[3] = face.uv[1] + s0 * vRange;
-                    subFace.uv[4] = face.uv[0] + t1 * uRange;
-                    subFace.uv[5] = face.uv[1] + s1 * vRange;
-                    subFace.uv[6] = face.uv[0] + t0 * uRange;
-                    subFace.uv[7] = face.uv[1] + s1 * vRange;
+        int midX30 = (face.x[3] + face.x[0]) / 2;
+        int midY30 = (face.y[3] + face.y[0]) / 2;
+        double midD30 = (face.d[3] + face.d[0]) * 0.5;
 
-                    subFace.texIndex = face.texIndex;
-                    subFace.brightness = face.brightness;
+        int centerX = (midX01 + midX23) / 2;
+        int centerY = (midY01 + midY23) / 2;
+        double centerD = (face.d[0] + face.d[1] + face.d[2] + face.d[3]) * 0.25;
 
-                    renderQuadDirectInTile(subFace, tile);
-                }
-            }
-        } else {
-            renderQuadDirectInTile(face, tile);
+        double midU = face.uv[0] + uRange * 0.5;
+        double midV = face.uv[1] + vRange * 0.5;
+
+        // Sub-quad 0: Top-left
+        subFaces[0].x[0] = face.x[0]; subFaces[0].y[0] = face.y[0]; subFaces[0].d[0] = face.d[0];
+        subFaces[0].x[1] = midX01; subFaces[0].y[1] = midY01; subFaces[0].d[1] = midD01;
+        subFaces[0].x[2] = centerX; subFaces[0].y[2] = centerY; subFaces[0].d[2] = centerD;
+        subFaces[0].x[3] = midX30; subFaces[0].y[3] = midY30; subFaces[0].d[3] = midD30;
+        subFaces[0].uv[0] = face.uv[0]; subFaces[0].uv[1] = face.uv[1];
+        subFaces[0].uv[2] = midU; subFaces[0].uv[3] = face.uv[1];
+        subFaces[0].uv[4] = midU; subFaces[0].uv[5] = midV;
+        subFaces[0].uv[6] = face.uv[0]; subFaces[0].uv[7] = midV;
+
+        // Sub-quad 1: Top-right
+        subFaces[1].x[0] = midX01; subFaces[1].y[0] = midY01; subFaces[1].d[0] = midD01;
+        subFaces[1].x[1] = face.x[1]; subFaces[1].y[1] = face.y[1]; subFaces[1].d[1] = face.d[1];
+        subFaces[1].x[2] = midX12; subFaces[1].y[2] = midY12; subFaces[1].d[2] = midD12;
+        subFaces[1].x[3] = centerX; subFaces[1].y[3] = centerY; subFaces[1].d[3] = centerD;
+        subFaces[1].uv[0] = midU; subFaces[1].uv[1] = face.uv[1];
+        subFaces[1].uv[2] = face.uv[2]; subFaces[1].uv[3] = face.uv[3];
+        subFaces[1].uv[4] = face.uv[2]; subFaces[1].uv[5] = midV;
+        subFaces[1].uv[6] = midU; subFaces[1].uv[7] = midV;
+
+        // Sub-quad 2: Bottom-right
+        subFaces[2].x[0] = centerX; subFaces[2].y[0] = centerY; subFaces[2].d[0] = centerD;
+        subFaces[2].x[1] = midX12; subFaces[2].y[1] = midY12; subFaces[2].d[1] = midD12;
+        subFaces[2].x[2] = face.x[2]; subFaces[2].y[2] = face.y[2]; subFaces[2].d[2] = face.d[2];
+        subFaces[2].x[3] = midX23; subFaces[2].y[3] = midY23; subFaces[2].d[3] = midD23;
+        subFaces[2].uv[0] = midU; subFaces[2].uv[1] = midV;
+        subFaces[2].uv[2] = face.uv[4]; subFaces[2].uv[3] = midV;
+        subFaces[2].uv[4] = face.uv[4]; subFaces[2].uv[5] = face.uv[5];
+        subFaces[2].uv[6] = midU; subFaces[2].uv[7] = face.uv[5];
+
+        // Sub-quad 3: Bottom-left
+        subFaces[3].x[0] = midX30; subFaces[3].y[0] = midY30; subFaces[3].d[0] = midD30;
+        subFaces[3].x[1] = centerX; subFaces[3].y[1] = centerY; subFaces[3].d[1] = centerD;
+        subFaces[3].x[2] = midX23; subFaces[3].y[2] = midY23; subFaces[3].d[2] = midD23;
+        subFaces[3].x[3] = face.x[3]; subFaces[3].y[3] = face.y[3]; subFaces[3].d[3] = face.d[3];
+        subFaces[3].uv[0] = face.uv[6]; subFaces[3].uv[1] = midV;
+        subFaces[3].uv[2] = midU; subFaces[3].uv[3] = midV;
+        subFaces[3].uv[4] = midU; subFaces[3].uv[5] = face.uv[7];
+        subFaces[3].uv[6] = face.uv[6]; subFaces[3].uv[7] = face.uv[7];
+
+        // Render all sub-quads with shared properties
+        for (int i = 0; i < 4; i++) {
+            subFaces[i].texIndex = face.texIndex;
+            subFaces[i].brightness = face.brightness;
+            renderQuadDirectInTile(subFaces[i], tile);
         }
     }
 

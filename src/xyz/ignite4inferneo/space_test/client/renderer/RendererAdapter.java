@@ -11,18 +11,18 @@ import java.awt.image.DataBufferInt;
  * with the existing Window class
  */
 public class RendererAdapter {
-    private final UltraOptimizedRenderer renderer;
+    private final PerspectiveCorrectRenderer renderer;
     private BufferedImage screenBuffer;
     private int[] bufferPixels;
     private int currentWidth = 0;
     private int currentHeight = 0;
 
     public RendererAdapter(World world) {
-        this.renderer = new UltraOptimizedRenderer(world, 1);
+        this.renderer = new PerspectiveCorrectRenderer(world, 1);
     }
 
     public RendererAdapter(World world, int threadCount) {
-        this.renderer = new UltraOptimizedRenderer(world, threadCount);
+        this.renderer = new PerspectiveCorrectRenderer(world, threadCount);
     }
 
     /**
