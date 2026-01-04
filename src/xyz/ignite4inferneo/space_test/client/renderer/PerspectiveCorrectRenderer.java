@@ -225,20 +225,21 @@ public class PerspectiveCorrectRenderer {
     public void render() {
         if (pixels == null) return;
 
-        // Clear buffers
-        Arrays.fill(pixels, 0x87CEEB);
+        Arrays.fill(pixels, 0xFF_6080A0); // Deep space sky gradient feel
         Arrays.fill(zBuffer, Double.POSITIVE_INFINITY);
+
         renderFaces.clear();
         entitySprites.clear();
-        quadsRendered = 0; quadsCulled = 0;
+        quadsRendered = 0;
+        quadsCulled = 0;
 
         updateCameraVectors();
         double fov = Math.PI / 3.0;
         double aspect = (double) width / height;
         frustum.update(x, y, z, fx, fy, fz, rx, rz, ux, uy, uz, fov, aspect);
 
-        int camChunkX = (int) Math.floor(x) >> 4;
-        int camChunkZ = (int) Math.floor(z) >> 4;
+        int camChunkX = (int) Math.floor(x / 16.0);
+        int camChunkZ = (int) Math.floor(z / 16.0);
 
         processDirtyChunks();
         collectAndSortChunks(camChunkX, camChunkZ);
@@ -246,15 +247,17 @@ public class PerspectiveCorrectRenderer {
         chunksRendered = 0;
         chunksMeshing = meshingInProgress.size();
 
-        for (int i = 0; i < chunkTasks.size(); i++) {
-            ChunkRenderTask task = chunkTasks.get(i);
-            if (renderChunk(task.chunkX, task.chunkZ, task.key)) chunksRendered++;
+        for (ChunkRenderTask task : chunkTasks) {
+            if (renderChunk(task.chunkX, task.chunkZ, task.key)) {
+                chunksRendered++;
+            }
         }
 
         collectEntitySprites();
+
+        // Sort faces back-to-front for correct transparency/overlaps (painter's algorithm)
         sortFaces();
 
-        // Render all faces with perspective-correct interpolation
         for (Face face : renderFaces) {
             renderPerspectiveCorrectQuad(face);
         }
@@ -368,24 +371,28 @@ public class PerspectiveCorrectRenderer {
             corners[3] = new double[]{ox, wy + quad.h, wz};
         }
 
-        // Project to screen and calculate perspective values
         Face face = new Face();
         int behindCount = 0;
+        double sumCamZ = 0;
 
         for (int i = 0; i < 4; i++) {
-            double dx = corners[i][0] - x, dy = corners[i][1] - y, dz = corners[i][2] - z;
+            double dx = corners[i][0] - x;
+            double dy = corners[i][1] - y;
+            double dz = corners[i][2] - z;
+
             double camZ = dx * fx + dy * fy + dz * fz;
+            sumCamZ += camZ;
 
             if (camZ < NEAR_PLANE) {
                 behindCount++;
-                camZ = NEAR_PLANE;
+                camZ = NEAR_PLANE; // Clamp to prevent div-by-zero & clipping artifacts
             }
 
             double scale = invTanHalfFov / camZ;
-            face.x[i] = (int)(halfWidth + (dx * rx + dz * rz) * scale * halfHeight);
-            face.y[i] = (int)(halfHeight - (dx * ux + dy * uy + dz * uz) * scale * halfHeight);
 
-            // Calculate 1/z for perspective-correct interpolation
+            face.x[i] = (int) (halfWidth + (dx * rx + dz * rz) * scale * halfHeight);
+            face.y[i] = (int) (halfHeight - (dx * ux + dy * uy + dz * uz) * scale * halfHeight);
+
             face.oneOverZ[i] = 1.0 / camZ;
         }
 
@@ -394,281 +401,269 @@ public class PerspectiveCorrectRenderer {
             return;
         }
 
-        // Setup UV coordinates
-        double[] uvs = new double[8];
-        if (quad.axis == 1) {
-            uvs[0] = 0; uvs[1] = 0;
-            uvs[2] = quad.w; uvs[3] = 0;
-            uvs[4] = quad.w; uvs[5] = quad.h;
-            uvs[6] = 0; uvs[7] = quad.h;
-        } else {
-            uvs[0] = 0; uvs[1] = quad.h;
-            uvs[2] = quad.w; uvs[3] = quad.h;
-            uvs[4] = quad.w; uvs[5] = 0;
-            uvs[6] = 0; uvs[7] = 0;
+        // UV setup based on axis (fixed order to match vertex winding)
+        double u0 = 0, v0 = 0, u1 = quad.w, v1 = quad.h;
+        if (quad.axis != 1) { // X or Z axis → flip V for correct orientation
+            v0 = quad.h; v1 = 0;
         }
 
-        // Calculate u/z and v/z for perspective-correct interpolation
-        for (int i = 0; i < 4; i++) {
-            face.uOverZ[i] = uvs[i * 2] * face.oneOverZ[i];
-            face.vOverZ[i] = uvs[i * 2 + 1] * face.oneOverZ[i];
-        }
+        face.uOverZ[0] = u0 * face.oneOverZ[0];
+        face.vOverZ[0] = v0 * face.oneOverZ[0];
+        face.uOverZ[1] = u1 * face.oneOverZ[1];
+        face.vOverZ[1] = v0 * face.oneOverZ[1];
+        face.uOverZ[2] = u1 * face.oneOverZ[2];
+        face.vOverZ[2] = v1 * face.oneOverZ[2];
+        face.uOverZ[3] = u0 * face.oneOverZ[3];
+        face.vOverZ[3] = v1 * face.oneOverZ[3];
 
         face.texIndex = quad.texIndex;
         face.brightness = quad.brightness;
-        face.avgDepth = (1.0/face.oneOverZ[0] + 1.0/face.oneOverZ[1] +
-                1.0/face.oneOverZ[2] + 1.0/face.oneOverZ[3]) * 0.25;
+        face.avgDepth = sumCamZ * 0.25;
 
         renderFaces.add(face);
         quadsRendered++;
     }
 
-/**
- * CORE: Perspective-correct texture mapping using 1/z interpolation
- * This is the key to eliminating warping!
- */
-private void renderPerspectiveCorrectQuad(Face face) {
-    int minY = Math.min(Math.min(face.y[0], face.y[1]), Math.min(face.y[2], face.y[3]));
-    int maxY = Math.max(Math.max(face.y[0], face.y[1]), Math.max(face.y[2], face.y[3]));
-
-    minY = Math.max(0, minY);
-    maxY = Math.min(height - 1, maxY);
-
-    if (minY > height - 1 || maxY < 0) return;
-
-    int brightnessInt = (int)(face.brightness * 256);
-
-    // Scanline rasterization
-    for (int sy = minY; sy <= maxY; sy++) {
-        double ex0 = Double.POSITIVE_INFINITY, ex1 = Double.NEGATIVE_INFINITY;
-        double eUZ0 = 0, eUZ1 = 0, eVZ0 = 0, eVZ1 = 0, eOZ0 = 0, eOZ1 = 0;
-
-        // Find edges at this scanline
+    private void renderPerspectiveCorrectQuad(Face face) {
+        // Find bounding box
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         for (int i = 0; i < 4; i++) {
-            int j = (i + 1) & 3;
-            if ((face.y[i] <= sy && face.y[j] > sy) || (face.y[j] <= sy && face.y[i] > sy)) {
-                double t = (sy - face.y[i]) / (double)(face.y[j] - face.y[i]);
-                double ex = face.x[i] + t * (face.x[j] - face.x[i]);
-
-                // Linearly interpolate u/z, v/z, and 1/z
-                double eUZ = face.uOverZ[i] + t * (face.uOverZ[j] - face.uOverZ[i]);
-                double eVZ = face.vOverZ[i] + t * (face.vOverZ[j] - face.vOverZ[i]);
-                double eOZ = face.oneOverZ[i] + t * (face.oneOverZ[j] - face.oneOverZ[i]);
-
-                if (ex < ex0) {
-                    ex0 = ex; eUZ0 = eUZ; eVZ0 = eVZ; eOZ0 = eOZ;
-                }
-                if (ex > ex1) {
-                    ex1 = ex; eUZ1 = eUZ; eVZ1 = eVZ; eOZ1 = eOZ;
-                }
-            }
+            minX = Math.min(minX, face.x[i]);
+            maxX = Math.max(maxX, face.x[i]);
+            minY = Math.min(minY, face.y[i]);
+            maxY = Math.max(maxY, face.y[i]);
         }
 
-        int minX = Math.max(0, (int)ex0);
-        int maxX = Math.min(width - 1, (int)ex1);
+        minY = Math.max(0, minY);
+        maxY = Math.min(height - 1, maxY);
+        if (minY > maxY) return;
 
-        if (minX > width - 1 || maxX < 0) continue;
+        int brightnessInt = Math.min(255, (int)(face.brightness * 256f));
 
-        double spanWidth = ex1 - ex0;
-        if (spanWidth < 0.001) continue;
+        for (int sy = minY; sy <= maxY; sy++) {
+            // Find left/right intersections
+            double leftX = Double.POSITIVE_INFINITY, rightX = Double.NEGATIVE_INFINITY;
+            double leftUZ = 0, leftVZ = 0, leftOZ = 0;
+            double rightUZ = 0, rightVZ = 0, rightOZ = 0;
 
-        double invSpanWidth = 1.0 / spanWidth;
-        int rowStart = sy * width;
+            for (int i = 0; i < 4; i++) {
+                int j = (i + 1) & 3;
+                int y1 = face.y[i], y2 = face.y[j];
+                if ((y1 <= sy && y2 > sy) || (y2 <= sy && y1 > sy)) {
+                    double t = (sy - y1) / (double)(y2 - y1);
+                    double ix = face.x[i] + t * (face.x[j] - face.x[i]);
 
-        // Render span with perspective-correct interpolation
-        for (int sx = minX; sx <= maxX; sx++) {
-            int idx = rowStart + sx;
-            if (idx < 0 || idx >= pixels.length) continue;
+                    double uz = face.uOverZ[i] + t * (face.uOverZ[j] - face.uOverZ[i]);
+                    double vz = face.vOverZ[i] + t * (face.vOverZ[j] - face.vOverZ[i]);
+                    double oz = face.oneOverZ[i] + t * (face.oneOverZ[j] - face.oneOverZ[i]);
 
-            double t = (sx - ex0) * invSpanWidth;
+                    if (ix < leftX) {
+                        leftX = ix; leftUZ = uz; leftVZ = vz; leftOZ = oz;
+                    }
+                    if (ix > rightX) {
+                        rightX = ix; rightUZ = uz; rightVZ = vz; rightOZ = oz;
+                    }
+                }
+            }
 
-            // Linearly interpolate u/z, v/z, 1/z
-            double uOverZ = eUZ0 + t * (eUZ1 - eUZ0);
-            double vOverZ = eVZ0 + t * (eVZ1 - eVZ0);
-            double oneOverZ = eOZ0 + t * (eOZ1 - eOZ0);
+            if (leftX >= rightX) continue;
 
-            // Recover actual depth
-            double depth = 1.0 / oneOverZ;
+            int startX = Math.max(0, (int) Math.ceil(leftX));
+            int endX   = Math.min(width - 1, (int) rightX);
 
-            if (depth < zBuffer[idx]) {
+            double invSpan = 1.0 / (rightX - leftX);
+            int rowOffset = sy * width;
+
+            for (int sx = startX; sx <= endX; sx++) {
+                double t = (sx - leftX) * invSpan;
+
+                double uOverZ = leftUZ + t * (rightUZ - leftUZ);
+                double vOverZ = leftVZ + t * (rightVZ - leftVZ);
+                double oneOverZ = leftOZ + t * (rightOZ - leftOZ);
+
+                double depth = 1.0 / oneOverZ;
+                int idx = rowOffset + sx;
+
+                if (depth >= zBuffer[idx]) continue; // Depth test (closer = smaller zBuffer value? Wait - you use < )
+
+                // Note: your zBuffer stores actual depth (smaller = closer), test with depth < zBuffer[idx]
                 zBuffer[idx] = depth;
 
-                // Recover correct u, v by dividing by z
                 double u = uOverZ * depth;
                 double v = vOverZ * depth;
 
                 int color = textureAtlas.sample(face.texIndex, u, v);
 
                 int r = (((color >> 16) & 0xFF) * brightnessInt) >> 8;
-                int g = (((color >> 8) & 0xFF) * brightnessInt) >> 8;
+                int g = (((color >> 8)  & 0xFF) * brightnessInt) >> 8;
                 int b = ((color & 0xFF) * brightnessInt) >> 8;
 
-                pixels[idx] = (r << 16) | (g << 8) | b;
+                pixels[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
             }
         }
     }
-}
 
-private void collectEntitySprites() {
-    entitySprites.clear();
-    Collection<Entity> entities = world.getEntityManager().getEntities();
-    for (Entity entity : entities) {
-        if (entity.isRemoved()) continue;
-        double dx = entity.x - x, dy = entity.y + entity.height / 2 - y, dz = entity.z - z;
-        double distSq = dx*dx + dy*dy + dz*dz;
-        if (distSq > 100 * 100) continue;
-        double camDepth = dx * fx + dy * fy + dz * fz;
-        if (camDepth < NEAR_PLANE) continue;
-        double scale = invTanHalfFov / camDepth;
-        int screenX = (int)(halfWidth + (dx * rx + dz * rz) * scale * halfHeight);
-        int screenY = (int)(halfHeight - (dx * ux + dy * uy + dz * uz) * scale * halfHeight);
-        int entitySize = (int)(entity.height * scale * halfHeight);
-        entitySize = Math.max(8, Math.min(entitySize, 200));
-        if (screenX + entitySize < 0 || screenX - entitySize >= width) continue;
-        if (screenY + entitySize < 0 || screenY - entitySize >= height) continue;
-        java.awt.image.BufferedImage texture = getEntityTexture(entity);
-        entitySprites.add(new EntitySprite(screenX, screenY, entitySize, entitySize, camDepth, texture, entity));
-    }
-    entitySprites.sort((a, b) -> Double.compare(b.depth, a.depth));
-}
-
-private java.awt.image.BufferedImage getEntityTexture(Entity entity) {
-    if (entity instanceof PlayerEntity || entity instanceof MobEntity) {
-        return MobTextureGenerator.getTexture(entity.getType());
-    }
-    return null;
-}
-
-private void renderEntitySprites() {
-    for (EntitySprite sprite : entitySprites) {
-        if (sprite.entity instanceof ItemEntity) {
-            renderItemEntitySprite(sprite, (ItemEntity)sprite.entity);
-        } else if (sprite.texture != null) {
-            renderTexturedEntitySprite(sprite);
+    private void collectEntitySprites() {
+        entitySprites.clear();
+        Collection<Entity> entities = world.getEntityManager().getEntities();
+        for (Entity entity : entities) {
+            if (entity.isRemoved()) continue;
+            double dx = entity.x - x, dy = entity.y + entity.height / 2 - y, dz = entity.z - z;
+            double distSq = dx*dx + dy*dy + dz*dz;
+            if (distSq > 100 * 100) continue;
+            double camDepth = dx * fx + dy * fy + dz * fz;
+            if (camDepth < NEAR_PLANE) continue;
+            double scale = invTanHalfFov / camDepth;
+            int screenX = (int)(halfWidth + (dx * rx + dz * rz) * scale * halfHeight);
+            int screenY = (int)(halfHeight - (dx * ux + dy * uy + dz * uz) * scale * halfHeight);
+            int entitySize = (int)(entity.height * scale * halfHeight);
+            entitySize = Math.max(8, Math.min(entitySize, 200));
+            if (screenX + entitySize < 0 || screenX - entitySize >= width) continue;
+            if (screenY + entitySize < 0 || screenY - entitySize >= height) continue;
+            java.awt.image.BufferedImage texture = getEntityTexture(entity);
+            entitySprites.add(new EntitySprite(screenX, screenY, entitySize, entitySize, camDepth, texture, entity));
         }
+        entitySprites.sort((a, b) -> Double.compare(b.depth, a.depth));
     }
-}
 
-private void renderTexturedEntitySprite(EntitySprite sprite) {
-    if (sprite.texture == null) return;
-    int bodyWidth = sprite.width / 2, bodyHeight = sprite.height;
-    drawTexturedRect(sprite.screenX - bodyWidth/2, sprite.screenY - bodyHeight/2,
-            bodyWidth, bodyHeight, sprite.texture, sprite.depth);
-    if (sprite.showHealth) {
-        renderHealthBar(sprite.screenX, sprite.screenY - bodyHeight/2 - 10,
-                bodyWidth * 2, sprite.healthPercent, sprite.depth - 0.02);
+    private java.awt.image.BufferedImage getEntityTexture(Entity entity) {
+        if (entity instanceof PlayerEntity || entity instanceof MobEntity) {
+            return MobTextureGenerator.getTexture(entity.getType());
+        }
+        return null;
     }
-}
 
-private void drawTexturedRect(int x, int y, int width, int height, java.awt.image.BufferedImage texture, double depth) {
-    int minX = Math.max(0, x), maxX = Math.min(this.width - 1, x + width);
-    int minY = Math.max(0, y), maxY = Math.min(this.height - 1, y + height);
-    int texWidth = texture.getWidth(), texHeight = texture.getHeight();
-    for (int sy = minY; sy < maxY; sy++) {
-        int rowStart = sy * this.width;
-        double v = (double)(sy - y) / height;
-        int texY = Math.max(0, Math.min(texHeight - 1, (int)(v * texHeight)));
-        for (int sx = minX; sx < maxX; sx++) {
-            int idx = rowStart + sx;
-            if (idx >= 0 && idx < pixels.length && depth < zBuffer[idx]) {
-                double u = (double)(sx - x) / width;
-                int texX = Math.max(0, Math.min(texWidth - 1, (int)(u * texWidth)));
-                int color = texture.getRGB(texX, texY);
-                int alpha = (color >> 24) & 0xFF;
-                if (alpha < 128) continue;
-                zBuffer[idx] = depth;
-                pixels[idx] = color & 0xFFFFFF;
+    private void renderEntitySprites() {
+        for (EntitySprite sprite : entitySprites) {
+            if (sprite.entity instanceof ItemEntity) {
+                renderItemEntitySprite(sprite, (ItemEntity)sprite.entity);
+            } else if (sprite.texture != null) {
+                renderTexturedEntitySprite(sprite);
             }
         }
     }
-}
 
-private void renderItemEntitySprite(EntitySprite sprite, ItemEntity itemEntity) {
-    ItemStack stack = itemEntity.getItemStack();
-    if (stack.isEmpty()) return;
-    int cubeSize = Math.max(8, sprite.width / 4);
-    int color = getItemColor(stack.getBlockId());
-    fillRectWithDepth(sprite.screenX - cubeSize/2, sprite.screenY - cubeSize/2,
-            cubeSize, cubeSize, color, sprite.depth);
-}
+    private void renderTexturedEntitySprite(EntitySprite sprite) {
+        if (sprite.texture == null) return;
+        int bodyWidth = sprite.width / 2, bodyHeight = sprite.height;
+        drawTexturedRect(sprite.screenX - bodyWidth/2, sprite.screenY - bodyHeight/2,
+                bodyWidth, bodyHeight, sprite.texture, sprite.depth);
+        if (sprite.showHealth) {
+            renderHealthBar(sprite.screenX, sprite.screenY - bodyHeight/2 - 10,
+                    bodyWidth * 2, sprite.healthPercent, sprite.depth - 0.02);
+        }
+    }
 
-private void renderHealthBar(int x, int y, int width, float healthPercent, double depth) {
-    int barHeight = 3;
-    fillRectWithDepth(x - width/2, y, width, barHeight, 0x00000096, depth);
-    int healthColor = healthPercent > 0.6f ? 0x00FF00 : healthPercent > 0.3f ? 0xFFFF00 : 0xFF0000;
-    fillRectWithDepth(x - width/2, y, (int)(width * healthPercent), barHeight, healthColor, depth - 0.001);
-}
-
-private void fillRectWithDepth(int x, int y, int w, int h, int color, double depth) {
-    int minX = Math.max(0, x), maxX = Math.min(width - 1, x + w);
-    int minY = Math.max(0, y), maxY = Math.min(height - 1, y + h);
-    int r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
-    int a = (color >> 24) & 0xFF;
-    if (a == 0) a = 255;
-
-    for (int sy = minY; sy < maxY; sy++) {
-        int rowStart = sy * width;
-        for (int sx = minX; sx < maxX; sx++) {
-            int idx = rowStart + sx;
-            if (idx >= 0 && idx < pixels.length && depth < zBuffer[idx]) {
-                zBuffer[idx] = depth;
-                if (a == 255) {
-                    pixels[idx] = (r << 16) | (g << 8) | b;
-                } else {
-                    int oldColor = pixels[idx];
-                    int newR = (r * a + ((oldColor >> 16) & 0xFF) * (255 - a)) / 255;
-                    int newG = (g * a + ((oldColor >> 8) & 0xFF) * (255 - a)) / 255;
-                    int newB = (b * a + (oldColor & 0xFF) * (255 - a)) / 255;
-                    pixels[idx] = (newR << 16) | (newG << 8) | newB;
+    private void drawTexturedRect(int x, int y, int width, int height, java.awt.image.BufferedImage texture, double depth) {
+        int minX = Math.max(0, x), maxX = Math.min(this.width - 1, x + width);
+        int minY = Math.max(0, y), maxY = Math.min(this.height - 1, y + height);
+        int texWidth = texture.getWidth(), texHeight = texture.getHeight();
+        for (int sy = minY; sy < maxY; sy++) {
+            int rowStart = sy * this.width;
+            double v = (double)(sy - y) / height;
+            int texY = Math.max(0, Math.min(texHeight - 1, (int)(v * texHeight)));
+            for (int sx = minX; sx < maxX; sx++) {
+                int idx = rowStart + sx;
+                if (idx >= 0 && idx < pixels.length && depth < zBuffer[idx]) {
+                    double u = (double)(sx - x) / width;
+                    int texX = Math.max(0, Math.min(texWidth - 1, (int)(u * texWidth)));
+                    int color = texture.getRGB(texX, texY);
+                    int alpha = (color >> 24) & 0xFF;
+                    if (alpha < 128) continue;
+                    zBuffer[idx] = depth;
+                    pixels[idx] = color & 0xFFFFFF;
                 }
             }
         }
     }
-}
 
-private int getItemColor(String blockId) {
-    return switch(blockId) {
-        case "space_test:stone" -> 0x808080;
-        case "space_test:dirt" -> 0x8B4513;
-        case "space_test:grass" -> 0x228B22;
-        case "space_test:wood" -> 0xA0522D;
-        default -> 0xC8C8C8;
-    };
-}
+    private void renderItemEntitySprite(EntitySprite sprite, ItemEntity itemEntity) {
+        ItemStack stack = itemEntity.getItemStack();
+        if (stack.isEmpty()) return;
+        int cubeSize = Math.max(8, sprite.width / 4);
+        int color = getItemColor(stack.getBlockId());
+        fillRectWithDepth(sprite.screenX - cubeSize/2, sprite.screenY - cubeSize/2,
+                cubeSize, cubeSize, color, sprite.depth);
+    }
 
-private void sortFaces() {
-    renderFaces.sort((a, b) -> Double.compare(b.avgDepth, a.avgDepth));
-}
+    private void renderHealthBar(int x, int y, int width, float healthPercent, double depth) {
+        int barHeight = 3;
+        fillRectWithDepth(x - width/2, y, width, barHeight, 0x00000096, depth);
+        int healthColor = healthPercent > 0.6f ? 0x00FF00 : healthPercent > 0.3f ? 0xFFFF00 : 0xFF0000;
+        fillRectWithDepth(x - width/2, y, (int)(width * healthPercent), barHeight, healthColor, depth - 0.001);
+    }
 
-private void cleanupOldMeshes() {
-    if (meshCache.size() < 300) return;
-    long now = System.currentTimeMillis();
-    int removed = 0;
-    Iterator<Map.Entry<Long, ChunkMesh>> it = meshCache.entrySet().iterator();
-    while (it.hasNext()) {
-        Map.Entry<Long, ChunkMesh> entry = it.next();
-        if (now - entry.getValue().lastUsed > 60000) {
-            it.remove();
-            removed++;
+    private void fillRectWithDepth(int x, int y, int w, int h, int color, double depth) {
+        int minX = Math.max(0, x), maxX = Math.min(width - 1, x + w);
+        int minY = Math.max(0, y), maxY = Math.min(height - 1, y + h);
+        int r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+        int a = (color >> 24) & 0xFF;
+        if (a == 0) a = 255;
+
+        for (int sy = minY; sy < maxY; sy++) {
+            int rowStart = sy * width;
+            for (int sx = minX; sx < maxX; sx++) {
+                int idx = rowStart + sx;
+                if (idx >= 0 && idx < pixels.length && depth < zBuffer[idx]) {
+                    zBuffer[idx] = depth;
+                    if (a == 255) {
+                        pixels[idx] = (r << 16) | (g << 8) | b;
+                    } else {
+                        int oldColor = pixels[idx];
+                        int newR = (r * a + ((oldColor >> 16) & 0xFF) * (255 - a)) / 255;
+                        int newG = (g * a + ((oldColor >> 8) & 0xFF) * (255 - a)) / 255;
+                        int newB = (b * a + (oldColor & 0xFF) * (255 - a)) / 255;
+                        pixels[idx] = (newR << 16) | (newG << 8) | newB;
+                    }
+                }
+            }
         }
     }
-    if (removed > 0) {
-        System.out.println("[PerspectiveCorrectRenderer] Cleaned up " + removed + " old meshes");
+
+    private int getItemColor(String blockId) {
+        return switch(blockId) {
+            case "space_test:stone" -> 0x808080;
+            case "space_test:dirt" -> 0x8B4513;
+            case "space_test:grass" -> 0x228B22;
+            case "space_test:wood" -> 0xA0522D;
+            default -> 0xC8C8C8;
+        };
     }
-}
 
-private static long chunkKey(int x, int z) {
-    return ((long)x << 32) | (z & 0xFFFFFFFFL);
-}
+    private void sortFaces() {
+        renderFaces.sort(Comparator.comparingDouble((Face f) -> f.avgDepth).reversed()); // Far to near
+    }
 
-public int getChunksRendered() { return chunksRendered; }
-public int getChunksMeshing() { return chunksMeshing; }
-public int getCachedMeshCount() { return meshCache.size(); }
-public int getQuadsRendered() { return quadsRendered; }
-public int getQuadsCulled() { return quadsCulled; }
+    private void cleanupOldMeshes() {
+        if (meshCache.size() < 300) return;
+        long now = System.currentTimeMillis();
+        int removed = 0;
+        Iterator<Map.Entry<Long, ChunkMesh>> it = meshCache.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<Long, ChunkMesh> entry = it.next();
+            if (now - entry.getValue().lastUsed > 60000) {
+                it.remove();
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            System.out.println("[PerspectiveCorrectRenderer] Cleaned up " + removed + " old meshes");
+        }
+    }
 
-public void shutdown() {
-    System.out.println("[PerspectiveCorrectRenderer] Shutting down...");
-    mesher.shutdown();
-}
+    private static long chunkKey(int x, int z) {
+        return ((long)x << 32) | (z & 0xFFFFFFFFL);
+    }
+
+    public int getChunksRendered() { return chunksRendered; }
+    public int getChunksMeshing() { return chunksMeshing; }
+    public int getCachedMeshCount() { return meshCache.size(); }
+    public int getQuadsRendered() { return quadsRendered; }
+    public int getQuadsCulled() { return quadsCulled; }
+
+    public void shutdown() {
+        System.out.println("[PerspectiveCorrectRenderer] Shutting down...");
+        mesher.shutdown();
+    }
 }
