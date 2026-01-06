@@ -10,13 +10,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * REBUILT: Perspective-correct texture mapper with proper depth interpolation
- *
- * Key improvements:
- * - True perspective-correct UV interpolation (no warping)
- * - Efficient scanline rasterization
- * - Proper depth testing
- * - Multi-threaded chunk meshing
+ * FIXED: Perspective-correct renderer with proper texture orientation and face culling
  */
 public class PerspectiveCorrectRenderer {
     private static final int RENDER_DISTANCE = 8;
@@ -51,19 +45,12 @@ public class PerspectiveCorrectRenderer {
     private long lastCleanupTime = 0;
     private static final long CLEANUP_INTERVAL = 30000;
 
-    /**
-     * Face with perspective-correct vertex data
-     */
     private static class Face {
-        // Screen coordinates
         int[] x = new int[4];
         int[] y = new int[4];
-
-        // Perspective-correct interpolation values (u/z, v/z, 1/z)
         double[] uOverZ = new double[4];
         double[] vOverZ = new double[4];
         double[] oneOverZ = new double[4];
-
         int texIndex;
         float brightness;
         double avgDepth;
@@ -225,7 +212,7 @@ public class PerspectiveCorrectRenderer {
     public void render() {
         if (pixels == null) return;
 
-        Arrays.fill(pixels, 0xFF_6080A0); // Deep space sky gradient feel
+        Arrays.fill(pixels, 0xFF87CEEB);
         Arrays.fill(zBuffer, Double.POSITIVE_INFINITY);
 
         renderFaces.clear();
@@ -254,8 +241,6 @@ public class PerspectiveCorrectRenderer {
         }
 
         collectEntitySprites();
-
-        // Sort faces back-to-front for correct transparency/overlaps (painter's algorithm)
         sortFaces();
 
         for (Face face : renderFaces) {
@@ -332,38 +317,131 @@ public class PerspectiveCorrectRenderer {
         });
     }
 
+    /**
+     * FIXED: Enhanced chunk rendering with neighbor-aware face culling
+     */
     private boolean renderChunk(int chunkX, int chunkZ, long key) {
         Chunk chunk = world.getChunk(chunkX, chunkZ);
         if (chunk == null) return false;
         ChunkMesh mesh = meshCache.get(key);
         if (mesh == null) return false;
         mesh.lastUsed = System.currentTimeMillis();
+
         int baseX = chunkX << 4, baseZ = chunkZ << 4;
-        for (GreedyMesher.Quad quad : mesh.quads) renderQuad(quad, baseX, baseZ);
+
+        // Get neighbor chunks for proper face culling at borders
+        Chunk chunkNorth = world.getChunk(chunkX, chunkZ - 1);
+        Chunk chunkSouth = world.getChunk(chunkX, chunkZ + 1);
+        Chunk chunkWest = world.getChunk(chunkX - 1, chunkZ);
+        Chunk chunkEast = world.getChunk(chunkX + 1, chunkZ);
+
+        for (GreedyMesher.Quad quad : mesh.quads) {
+            // Check if face is on chunk border and should be culled
+            if (shouldCullBorderFace(quad, chunkNorth, chunkSouth, chunkWest, chunkEast)) {
+                quadsCulled++;
+                continue;
+            }
+            renderQuad(quad, baseX, baseZ);
+        }
         return true;
     }
 
     /**
-     * Project quad to screen and setup perspective-correct interpolation
+     * Check if a border face should be culled
+     */
+    private boolean shouldCullBorderFace(GreedyMesher.Quad quad,
+                                         Chunk north, Chunk south, Chunk west, Chunk east) {
+        // Check if quad is on chunk border
+        if (quad.axis == 2) { // Z axis
+            if (quad.z == 0 && quad.dir < 0 && north != null) {
+                // North border, check all blocks in the quad
+                for (int dx = 0; dx < quad.w; dx++) {
+                    for (int dy = 0; dy < quad.h; dy++) {
+                        if (!isNeighborSolid(north, quad.x + dx, quad.y + dy, 15)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            } else if (quad.z == 15 && quad.dir > 0 && south != null) {
+                // South border
+                for (int dx = 0; dx < quad.w; dx++) {
+                    for (int dy = 0; dy < quad.h; dy++) {
+                        if (!isNeighborSolid(south, quad.x + dx, quad.y + dy, 0)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+        } else if (quad.axis == 0) { // X axis
+            if (quad.x == 0 && quad.dir < 0 && west != null) {
+                // West border
+                for (int dz = 0; dz < quad.w; dz++) {
+                    for (int dy = 0; dy < quad.h; dy++) {
+                        if (!isNeighborSolid(west, 15, quad.y + dy, quad.z + dz)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            } else if (quad.x == 15 && quad.dir > 0 && east != null) {
+                // East border
+                for (int dz = 0; dz < quad.w; dz++) {
+                    for (int dy = 0; dy < quad.h; dy++) {
+                        if (!isNeighborSolid(east, 0, quad.y + dy, quad.z + dz)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if neighbor chunk position has solid block
+     */
+    private boolean isNeighborSolid(Chunk chunk, int x, int y, int z) {
+        String blockId = chunk.getBlock(x, y, z);
+        if (blockId.equals("space_test:air")) return false;
+
+        xyz.ignite4inferneo.space_test.api.block.Block block =
+                xyz.ignite4inferneo.space_test.api.registry.Registries.BLOCKS.get(blockId);
+        return block != null && block.isSolid() && !block.isTransparent();
+    }
+
+    /**
+     * FIXED: Project quad with correct UV orientation
      */
     private void renderQuad(GreedyMesher.Quad quad, int baseX, int baseZ) {
         double wx = baseX + quad.x, wy = quad.y, wz = baseZ + quad.z;
         double[][] corners = new double[4][3];
 
-        // Build world-space corners
-        if (quad.axis == 1) { // Y face
+        // Build world-space corners with CORRECT winding order
+        if (quad.axis == 1) { // Y face (horizontal)
             double oy = wy + (quad.dir > 0 ? 1 : 0);
-            corners[0] = new double[]{wx, oy, wz};
-            corners[1] = new double[]{wx + quad.w, oy, wz};
-            corners[2] = new double[]{wx + quad.w, oy, wz + quad.h};
-            corners[3] = new double[]{wx, oy, wz + quad.h};
-        } else if (quad.axis == 2) { // Z face
+            if (quad.dir > 0) {
+                // Top face (looking down at it)
+                corners[0] = new double[]{wx, oy, wz};
+                corners[1] = new double[]{wx + quad.w, oy, wz};
+                corners[2] = new double[]{wx + quad.w, oy, wz + quad.h};
+                corners[3] = new double[]{wx, oy, wz + quad.h};
+            } else {
+                // Bottom face (looking up at it)
+                corners[0] = new double[]{wx, oy, wz + quad.h};
+                corners[1] = new double[]{wx + quad.w, oy, wz + quad.h};
+                corners[2] = new double[]{wx + quad.w, oy, wz};
+                corners[3] = new double[]{wx, oy, wz};
+            }
+        } else if (quad.axis == 2) { // Z face (north-south)
             double oz = wz + (quad.dir > 0 ? 1 : 0);
             corners[0] = new double[]{wx, wy, oz};
             corners[1] = new double[]{wx + quad.w, wy, oz};
             corners[2] = new double[]{wx + quad.w, wy + quad.h, oz};
             corners[3] = new double[]{wx, wy + quad.h, oz};
-        } else { // X face
+        } else { // X face (east-west)
             double ox = wx + (quad.dir > 0 ? 1 : 0);
             corners[0] = new double[]{ox, wy, wz};
             corners[1] = new double[]{ox, wy, wz + quad.w};
@@ -385,7 +463,7 @@ public class PerspectiveCorrectRenderer {
 
             if (camZ < NEAR_PLANE) {
                 behindCount++;
-                camZ = NEAR_PLANE; // Clamp to prevent div-by-zero & clipping artifacts
+                camZ = NEAR_PLANE;
             }
 
             double scale = invTanHalfFov / camZ;
@@ -401,10 +479,17 @@ public class PerspectiveCorrectRenderer {
             return;
         }
 
-        // UV setup based on axis (fixed order to match vertex winding)
-        double u0 = 0, v0 = 0, u1 = quad.w, v1 = quad.h;
-        if (quad.axis != 1) { // X or Z axis → flip V for correct orientation
-            v0 = quad.h; v1 = 0;
+        // FIXED: UV coordinates with correct orientation for all axes
+        double u0, v0, u1, v1;
+
+        if (quad.axis == 1) {
+            // Horizontal faces (top/bottom) - use XZ coordinates
+            u0 = 0; v0 = 0;
+            u1 = quad.w; v1 = quad.h;
+        } else {
+            // Vertical faces (X/Z axis) - use width x height
+            u0 = 0; v0 = quad.h;
+            u1 = quad.w; v1 = 0;
         }
 
         face.uOverZ[0] = u0 * face.oneOverZ[0];
@@ -424,13 +509,97 @@ public class PerspectiveCorrectRenderer {
         quadsRendered++;
     }
 
+    /**
+     * FIXED: Render quad with adaptive subdivision
+     */
     private void renderPerspectiveCorrectQuad(Face face) {
-        // Find bounding box
+        // Calculate screen-space size and depth variance
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         for (int i = 0; i < 4; i++) {
             minX = Math.min(minX, face.x[i]);
             maxX = Math.max(maxX, face.x[i]);
+            minY = Math.min(minY, face.y[i]);
+            maxY = Math.max(maxY, face.y[i]);
+        }
+
+        int screenWidth = maxX - minX;
+        int screenHeight = maxY - minY;
+        int maxDim = Math.max(screenWidth, screenHeight);
+
+        // Check depth variance
+        double minDepth = Double.MAX_VALUE, maxDepth = Double.MIN_VALUE;
+        for (int i = 0; i < 4; i++) {
+            double depth = 1.0 / face.oneOverZ[i];
+            minDepth = Math.min(minDepth, depth);
+            maxDepth = Math.max(maxDepth, depth);
+        }
+
+        double depthRatio = maxDepth / Math.max(0.1, minDepth);
+
+        // Adaptive subdivision: subdivide if CLOSE + LARGE or HIGH depth variance
+        boolean needsSubdivision = (maxDim > 100 && minDepth < 3.0) ||
+                (maxDim > 64 && depthRatio > 1.3);
+
+        if (needsSubdivision) {
+            subdivideQuadForRendering(face, 2);
+        } else {
+            renderQuadDirect(face);
+        }
+    }
+
+    /**
+     * Subdivide quad for better perspective correction
+     */
+    private void subdivideQuadForRendering(Face face, int divisions) {
+        double step = 1.0 / divisions;
+
+        for (int row = 0; row < divisions; row++) {
+            for (int col = 0; col < divisions; col++) {
+                Face subFace = new Face();
+
+                // Bilinear interpolation of corners
+                for (int corner = 0; corner < 4; corner++) {
+                    double u = 0, v = 0;
+                    switch (corner) {
+                        case 0: u = col * step; v = row * step; break;
+                        case 1: u = (col + 1) * step; v = row * step; break;
+                        case 2: u = (col + 1) * step; v = (row + 1) * step; break;
+                        case 3: u = col * step; v = (row + 1) * step; break;
+                    }
+
+                    // Bilinear interpolation
+                    double w00 = (1 - u) * (1 - v);
+                    double w10 = u * (1 - v);
+                    double w11 = u * v;
+                    double w01 = (1 - u) * v;
+
+                    subFace.x[corner] = (int)(w00 * face.x[0] + w10 * face.x[1] +
+                            w11 * face.x[2] + w01 * face.x[3]);
+                    subFace.y[corner] = (int)(w00 * face.y[0] + w10 * face.y[1] +
+                            w11 * face.y[2] + w01 * face.y[3]);
+                    subFace.oneOverZ[corner] = w00 * face.oneOverZ[0] + w10 * face.oneOverZ[1] +
+                            w11 * face.oneOverZ[2] + w01 * face.oneOverZ[3];
+                    subFace.uOverZ[corner] = w00 * face.uOverZ[0] + w10 * face.uOverZ[1] +
+                            w11 * face.uOverZ[2] + w01 * face.uOverZ[3];
+                    subFace.vOverZ[corner] = w00 * face.vOverZ[0] + w10 * face.vOverZ[1] +
+                            w11 * face.vOverZ[2] + w01 * face.vOverZ[3];
+                }
+
+                subFace.texIndex = face.texIndex;
+                subFace.brightness = face.brightness;
+
+                renderQuadDirect(subFace);
+            }
+        }
+    }
+
+    /**
+     * Direct scanline rendering
+     */
+    private void renderQuadDirect(Face face) {
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        for (int i = 0; i < 4; i++) {
             minY = Math.min(minY, face.y[i]);
             maxY = Math.max(maxY, face.y[i]);
         }
@@ -442,7 +611,6 @@ public class PerspectiveCorrectRenderer {
         int brightnessInt = Math.min(255, (int)(face.brightness * 256f));
 
         for (int sy = minY; sy <= maxY; sy++) {
-            // Find left/right intersections
             double leftX = Double.POSITIVE_INFINITY, rightX = Double.NEGATIVE_INFINITY;
             double leftUZ = 0, leftVZ = 0, leftOZ = 0;
             double rightUZ = 0, rightVZ = 0, rightOZ = 0;
@@ -470,7 +638,7 @@ public class PerspectiveCorrectRenderer {
             if (leftX >= rightX) continue;
 
             int startX = Math.max(0, (int) Math.ceil(leftX));
-            int endX   = Math.min(width - 1, (int) rightX);
+            int endX = Math.min(width - 1, (int) rightX);
 
             double invSpan = 1.0 / (rightX - leftX);
             int rowOffset = sy * width;
@@ -485,9 +653,8 @@ public class PerspectiveCorrectRenderer {
                 double depth = 1.0 / oneOverZ;
                 int idx = rowOffset + sx;
 
-                if (depth >= zBuffer[idx]) continue; // Depth test (closer = smaller zBuffer value? Wait - you use < )
+                if (depth >= zBuffer[idx]) continue;
 
-                // Note: your zBuffer stores actual depth (smaller = closer), test with depth < zBuffer[idx]
                 zBuffer[idx] = depth;
 
                 double u = uOverZ * depth;
@@ -496,7 +663,7 @@ public class PerspectiveCorrectRenderer {
                 int color = textureAtlas.sample(face.texIndex, u, v);
 
                 int r = (((color >> 16) & 0xFF) * brightnessInt) >> 8;
-                int g = (((color >> 8)  & 0xFF) * brightnessInt) >> 8;
+                int g = (((color >> 8) & 0xFF) * brightnessInt) >> 8;
                 int b = ((color & 0xFF) * brightnessInt) >> 8;
 
                 pixels[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
@@ -632,7 +799,7 @@ public class PerspectiveCorrectRenderer {
     }
 
     private void sortFaces() {
-        renderFaces.sort(Comparator.comparingDouble((Face f) -> f.avgDepth).reversed()); // Far to near
+        renderFaces.sort(Comparator.comparingDouble((Face f) -> f.avgDepth).reversed());
     }
 
     private void cleanupOldMeshes() {
